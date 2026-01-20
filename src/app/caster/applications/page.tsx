@@ -5,7 +5,7 @@ import { createClient } from '@/lib/supabase/client';
 import { DashboardNav } from '@/components/DashboardNav';
 import type { Application, ApplicationStatus } from '@/types';
 
-interface ApplicationWithDetails extends Application {
+interface ApplicationWithDetails extends Omit<Application, 'casting_call' | 'actor_profile'> {
     actor_profile?: {
         id: string;
         age: number;
@@ -157,8 +157,8 @@ export default function CasterApplicationsPage() {
                                         key={app.id}
                                         onClick={() => setSelectedApp(app)}
                                         className={`card cursor-pointer transition-all ${selectedApp?.id === app.id
-                                                ? 'border-primary-500 ring-1 ring-primary-500'
-                                                : 'card-hover'
+                                            ? 'border-primary-500 ring-1 ring-primary-500'
+                                            : 'card-hover'
                                             }`}
                                     >
                                         <div className="flex items-center gap-4">
@@ -307,8 +307,8 @@ export default function CasterApplicationsPage() {
                                             onClick={() => updateStatus(selectedApp.id, action.status)}
                                             disabled={updating}
                                             className={`btn flex-1 ${action.color === 'emerald' ? 'btn-primary' :
-                                                    action.color === 'amber' ? 'btn-accent' :
-                                                        'btn-secondary text-red-400'
+                                                action.color === 'amber' ? 'btn-accent' :
+                                                    'btn-secondary text-red-400'
                                                 }`}
                                         >
                                             {action.label}
