@@ -24,34 +24,33 @@ export default function CreateCastingCallPage() {
     const [deadline, setDeadline] = useState('');
 
     useEffect(() => {
+        const loadProfile = async () => {
+            const supabase = createClient();
+            const { data: { user } } = await supabase.auth.getUser();
+
+            if (!user) {
+                router.push('/auth/login');
+                return;
+            }
+
+            const { data: profileData } = await supabase
+                .from('profiles')
+                .select('full_name')
+                .eq('id', user.id)
+                .single();
+
+            const { data: casterData } = await supabase
+                .from('casting_profiles')
+                .select('id')
+                .eq('user_id', user.id)
+                .single();
+
+            setProfile(profileData);
+            setCasterProfile(casterData);
+            setLoading(false);
+        };
         loadProfile();
-    }, []);
-
-    const loadProfile = async () => {
-        const supabase = createClient();
-        const { data: { user } } = await supabase.auth.getUser();
-
-        if (!user) {
-            router.push('/auth/login');
-            return;
-        }
-
-        const { data: profileData } = await supabase
-            .from('profiles')
-            .select('full_name')
-            .eq('id', user.id)
-            .single();
-
-        const { data: casterData } = await supabase
-            .from('casting_profiles')
-            .select('id')
-            .eq('user_id', user.id)
-            .single();
-
-        setProfile(profileData);
-        setCasterProfile(casterData);
-        setLoading(false);
-    };
+    }, [router]);
 
     const handleGenderChange = (value: string) => {
         setGender(prev =>

@@ -27,72 +27,71 @@ export default function ApplyToCastingCallPage({ params }: PageProps) {
     const [videoUrl, setVideoUrl] = useState('');
 
     useEffect(() => {
-        loadData();
-    }, [id]);
+        const loadData = async () => {
+            const supabase = createClient();
+            const { data: { user } } = await supabase.auth.getUser();
 
-    const loadData = async () => {
-        const supabase = createClient();
-        const { data: { user } } = await supabase.auth.getUser();
+            if (!user) {
+                router.push('/auth/login');
+                return;
+            }
 
-        if (!user) {
-            router.push('/auth/login');
-            return;
-        }
-
-        // Get profile
-        const { data: profileData } = await supabase
-            .from('profiles')
-            .select('full_name')
-            .eq('id', user.id)
-            .single();
-
-        // Get actor profile
-        const { data: actorData } = await supabase
-            .from('actor_profiles')
-            .select('id')
-            .eq('user_id', user.id)
-            .single();
-
-        // Get casting call
-        const { data: callData } = await supabase
-            .from('casting_calls')
-            .select(`
-                title,
-                casting_profile:casting_profiles(company_name)
-            `)
-            .eq('id', id)
-            .single();
-
-        // Check if already applied
-        if (actorData) {
-            const { data: existingApp } = await supabase
-                .from('applications')
-                .select('id')
-                .eq('casting_call_id', id)
-                .eq('actor_id', actorData.id)
+            // Get profile
+            const { data: profileData } = await supabase
+                .from('profiles')
+                .select('full_name')
+                .eq('id', user.id)
                 .single();
 
-            if (existingApp) {
-                setAlreadyApplied(true);
-            }
-        }
+            // Get actor profile
+            const { data: actorData } = await supabase
+                .from('actor_profiles')
+                .select('id')
+                .eq('user_id', user.id)
+                .single();
 
-        setProfile(profileData);
-        setActorProfile(actorData);
-        // Transform callData to handle Supabase's array response for joins
-        if (callData) {
-            const castingProfile = Array.isArray(callData.casting_profile)
-                ? callData.casting_profile[0]
-                : callData.casting_profile;
-            setCastingCall({
-                title: callData.title,
-                casting_profile: castingProfile
-            });
-        } else {
-            setCastingCall(null);
-        }
-        setLoading(false);
-    };
+            // Get casting call
+            const { data: callData } = await supabase
+                .from('casting_calls')
+                .select(`
+                    title,
+                    casting_profile:casting_profiles(company_name)
+                `)
+                .eq('id', id)
+                .single();
+
+            // Check if already applied
+            if (actorData) {
+                const { data: existingApp } = await supabase
+                    .from('applications')
+                    .select('id')
+                    .eq('casting_call_id', id)
+                    .eq('actor_id', actorData.id)
+                    .single();
+
+                if (existingApp) {
+                    setAlreadyApplied(true);
+                }
+            }
+
+            setProfile(profileData);
+            setActorProfile(actorData);
+            // Transform callData to handle Supabase's array response for joins
+            if (callData) {
+                const castingProfile = Array.isArray(callData.casting_profile)
+                    ? callData.casting_profile[0]
+                    : callData.casting_profile;
+                setCastingCall({
+                    title: callData.title,
+                    casting_profile: castingProfile
+                });
+            } else {
+                setCastingCall(null);
+            }
+            setLoading(false);
+        };
+        loadData();
+    }, [id, router]);
 
     const handleSubmit = async (e: React.FormEvent) => {
         e.preventDefault();

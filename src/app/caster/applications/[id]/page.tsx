@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useCallback } from 'react';
 import { useRouter } from 'next/navigation';
 import { use } from 'react';
 import Link from 'next/link';
@@ -43,11 +43,7 @@ export default function ReviewApplicationPage({ params }: PageProps) {
     const [loading, setLoading] = useState(true);
     const [updating, setUpdating] = useState(false);
 
-    useEffect(() => {
-        loadData();
-    }, [id]);
-
-    const loadData = async () => {
+    const loadData = useCallback(async () => {
         const supabase = createClient();
         const { data: { user } } = await supabase.auth.getUser();
 
@@ -83,7 +79,11 @@ export default function ReviewApplicationPage({ params }: PageProps) {
         setProfile(profileData);
         setApplication(appData as Application);
         setLoading(false);
-    };
+    }, [id, router]);
+
+    useEffect(() => {
+        loadData();
+    }, [loadData]);
 
     const updateStatus = async (status: 'shortlisted' | 'selected' | 'rejected') => {
         setUpdating(true);
