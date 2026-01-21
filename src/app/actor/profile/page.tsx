@@ -1,6 +1,7 @@
 'use client';
 
 import { useState, useEffect } from 'react';
+import Image from 'next/image';
 import { createClient } from '@/lib/supabase/client';
 import { DashboardNav } from '@/components/DashboardNav';
 import type { ActorProfile, Profile, ActorImage } from '@/types';
@@ -216,11 +217,14 @@ export default function ActorProfilePage() {
                                             : 'border-neutral-700 hover:border-neutral-600'
                                         } transition-colors`}>
                                         {getImageUrl(type) ? (
-                                            <img
-                                                src={getImageUrl(type)}
-                                                alt={`${type} view`}
-                                                className="w-full h-full object-cover"
-                                            />
+                                            <div className="relative w-full h-full">
+                                                <Image
+                                                    src={getImageUrl(type)!}
+                                                    alt={`${type} view`}
+                                                    fill
+                                                    className="object-cover"
+                                                />
+                                            </div>
                                         ) : (
                                             <div className="w-full h-full flex flex-col items-center justify-center bg-neutral-800/50 group-hover:bg-neutral-800 transition-colors">
                                                 <span className="text-3xl mb-2">📷</span>

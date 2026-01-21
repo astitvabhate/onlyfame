@@ -1,6 +1,7 @@
 'use client';
 
 import { useState, useEffect } from 'react';
+import Image from 'next/image';
 import { createClient } from '@/lib/supabase/client';
 import { DashboardNav } from '@/components/DashboardNav';
 import type { Application, ApplicationStatus } from '@/types';
@@ -163,12 +164,13 @@ export default function CasterApplicationsPage() {
                                     >
                                         <div className="flex items-center gap-4">
                                             {/* Avatar */}
-                                            <div className="w-16 h-16 rounded-xl overflow-hidden bg-neutral-800 flex-shrink-0">
+                                            <div className="relative w-16 h-16 rounded-xl overflow-hidden bg-neutral-800 flex-shrink-0">
                                                 {centerImage(app.actor_profile?.images) ? (
-                                                    <img
-                                                        src={centerImage(app.actor_profile?.images)}
+                                                    <Image
+                                                        src={centerImage(app.actor_profile?.images)!}
                                                         alt=""
-                                                        className="w-full h-full object-cover"
+                                                        fill
+                                                        className="object-cover"
                                                     />
                                                 ) : (
                                                     <div className="w-full h-full flex items-center justify-center text-2xl">
@@ -236,9 +238,9 @@ export default function CasterApplicationsPage() {
                                     {['left', 'center', 'right'].map((type) => {
                                         const img = selectedApp.actor_profile?.images?.find(i => i.type === type);
                                         return (
-                                            <div key={type} className="aspect-square rounded-lg overflow-hidden bg-neutral-800">
+                                            <div key={type} className="relative aspect-square rounded-lg overflow-hidden bg-neutral-800">
                                                 {img ? (
-                                                    <img src={img.image_url} alt={type} className="w-full h-full object-cover" />
+                                                    <Image src={img.image_url} alt={type} fill className="object-cover" />
                                                 ) : (
                                                     <div className="w-full h-full flex items-center justify-center text-neutral-600 text-xs">
                                                         No {type}

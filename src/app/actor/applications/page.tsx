@@ -119,7 +119,7 @@ export default async function ActorApplicationsPage() {
                                 {/* Show contact info if selected */}
                                 {app.status === 'selected' && (
                                     <div className="mt-4 p-4 rounded-xl bg-emerald-500/10 border border-emerald-500/30">
-                                        <p className="text-emerald-300 font-medium mb-2">🎉 Congratulations! You've been selected!</p>
+                                        <p className="text-emerald-300 font-medium mb-2">🎉 Congratulations! You&apos;ve been selected!</p>
                                         <p className="text-emerald-300/70 text-sm">
                                             The casting team will contact you with further details.
                                         </p>

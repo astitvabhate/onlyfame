@@ -18,7 +18,7 @@ export function ProfileSetupLoading() {
                 <div className="w-16 h-16 rounded-full border-4 border-primary-500/30 border-t-primary-500 animate-spin mx-auto mb-6"></div>
                 <h2 className="text-xl font-semibold mb-2">Setting up your profile...</h2>
                 <p className="text-neutral-400 mb-8">
-                    We're creating your secure workspace. This usually takes just a moment.
+                    We&apos;re creating your secure workspace. This usually takes just a moment.
                 </p>
 
                 <div className="flex flex-col gap-3">

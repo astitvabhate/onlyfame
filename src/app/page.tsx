@@ -60,7 +60,7 @@ export default function Home() {
                                 <span>🎭</span> Join as Actor
                             </Link>
                             <Link href="/auth/register?role=caster" className="btn btn-secondary text-lg px-8 py-4">
-                                <span>🎬</span> I'm a Casting Director
+                                <span>🎬</span> I&apos;m a Casting Director
                             </Link>
                         </div>
 
@@ -151,7 +151,7 @@ export default function Home() {
                             </div>
                             <h3 className="text-xl font-semibold text-white mb-2">Instant Notifications</h3>
                             <p className="text-neutral-400">
-                                Get notified immediately when you're shortlisted or selected.
+                                Get notified immediately when you&apos;re shortlisted or selected.
                             </p>
                         </div>
 
