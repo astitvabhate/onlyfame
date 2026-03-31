@@ -1,13 +1,31 @@
 import type { Metadata } from "next";
-import { Inter } from "next/font/google";
+import { Manrope, Playfair_Display } from "next/font/google";
 import "./globals.css";
+import { ServiceWorkerReset } from "@/components/ServiceWorkerReset";
 
-const inter = Inter({ subsets: ["latin"] });
+const sans = Manrope({
+    subsets: ["latin"],
+    variable: "--font-sans",
+});
+
+const serif = Playfair_Display({
+    subsets: ["latin"],
+    variable: "--font-serif",
+    weight: ["600", "700"],
+});
 
 export const metadata: Metadata = {
-    title: "ONLYFAME - Casting & Talent Discovery Platform",
-    description: "Connect with verified casting directors and discover your next big role. Structured auditions, transparent process, merit-driven casting.",
-    keywords: ["casting", "actors", "auditions", "talent", "entertainment", "bollywood", "casting calls"],
+    title: "ONLYFAME | Premium casting workflows for actors and casting teams",
+    description:
+        "ONLYFAME brings structure, trust, and polished audition workflows to modern casting teams and working actors.",
+    keywords: [
+        "casting platform",
+        "actors",
+        "casting directors",
+        "auditions",
+        "talent discovery",
+        "Indian entertainment",
+    ],
 };
 
 export default function RootLayout({
@@ -16,8 +34,9 @@ export default function RootLayout({
     children: React.ReactNode;
 }>) {
     return (
-        <html lang="en">
-            <body className={inter.className}>
+        <html lang="en" className={`${sans.variable} ${serif.variable}`}>
+            <body className="font-[var(--font-sans)] film-grain">
+                <ServiceWorkerReset />
                 {children}
             </body>
         </html>

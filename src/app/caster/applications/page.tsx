@@ -1,20 +1,28 @@
 'use client';
 
-import { useState, useEffect } from 'react';
-import { createClient } from '@/lib/supabase/client';
+import { useEffect, useMemo, useState } from 'react';
 import { DashboardNav } from '@/components/DashboardNav';
-import type { Application, ApplicationStatus } from '@/types';
+import { StatusBadge } from '@/components/StatusBadge';
+import type { ApplicationStatus } from '@/types';
 
-interface ApplicationWithDetails extends Omit<Application, 'casting_call' | 'actor_profile'> {
+interface ApplicationWithDetails {
+    id: string;
+    casting_call_id: string;
+    audition_video_url: string | null;
+    notes: string | null;
+    review_notes?: string | null;
+    status: ApplicationStatus;
+    created_at: string;
     actor_profile?: {
         id: string;
-        age: number;
-        gender: string;
-        bio: string;
+        age: number | null;
+        gender: string | null;
+        location?: string | null;
+        bio: string | null;
         profile?: {
             full_name: string;
             email: string;
-            phone: string;
+            phone: string | null;
         };
         images?: { type: string; image_url: string }[];
     };
@@ -29,300 +37,286 @@ export default function CasterApplicationsPage() {
     const [loading, setLoading] = useState(true);
     const [selectedApp, setSelectedApp] = useState<ApplicationWithDetails | null>(null);
     const [updating, setUpdating] = useState(false);
+    const [reviewNotes, setReviewNotes] = useState('');
 
     useEffect(() => {
         loadData();
     }, []);
 
+    useEffect(() => {
+        setReviewNotes(selectedApp?.review_notes || '');
+    }, [selectedApp]);
+
+    const statusCounts = useMemo(
+        () => ({
+            applied: applications.filter((app) => app.status === 'applied').length,
+            shortlisted: applications.filter((app) => app.status === 'shortlisted').length,
+            selected: applications.filter((app) => app.status === 'selected').length,
+            rejected: applications.filter((app) => app.status === 'rejected').length,
+        }),
+        [applications]
+    );
+
     const loadData = async () => {
-        const supabase = createClient();
-        const { data: { user } } = await supabase.auth.getUser();
+        const [profileResponse, applicationsResponse] = await Promise.all([
+            fetch('/api/caster/profile'),
+            fetch('/api/caster/applications'),
+        ]);
 
-        if (!user) return;
-
-        const { data: profileData } = await supabase
-            .from('profiles')
-            .select('full_name')
-            .eq('id', user.id)
-            .single();
-
-        setProfile(profileData);
-
-        const { data: casterProfile } = await supabase
-            .from('casting_profiles')
-            .select('id')
-            .eq('user_id', user.id)
-            .single();
-
-        if (!casterProfile) return;
-
-        // Get all casting calls for this caster
-        const { data: calls } = await supabase
-            .from('casting_calls')
-            .select('id')
-            .eq('caster_id', casterProfile.id);
-
-        const callIds = calls?.map(c => c.id) || [];
-
-        if (callIds.length === 0) {
+        if (!profileResponse.ok || !applicationsResponse.ok) {
             setLoading(false);
             return;
         }
 
-        // Get applications with actor details
-        const { data: apps } = await supabase
-            .from('applications')
-            .select(`
-        *,
-        casting_call:casting_calls(title),
-        actor_profile:actor_profiles(
-          id,
-          age,
-          gender,
-          bio,
-          profile:profiles(full_name, email, phone),
-          images:actor_images(type, image_url)
-        )
-      `)
-            .in('casting_call_id', callIds)
-            .order('created_at', { ascending: false });
+        const profilePayload = await profileResponse.json();
+        const applicationsPayload = await applicationsResponse.json();
 
-        setApplications(apps || []);
+        const apps = (applicationsPayload.applications || []).map((application: any) => ({
+            id: application.id,
+            casting_call_id: application.castingCallId,
+            audition_video_url: application.auditionVideoUrl,
+            notes: application.notes,
+            review_notes: application.reviewNotes,
+            status: application.status,
+            created_at: application.createdAt,
+            actor_profile: application.actorProfile
+                ? {
+                      id: application.actorProfile.id,
+                      age: application.actorProfile.age,
+                      gender: application.actorProfile.gender,
+                      location: application.actorProfile.location,
+                      bio: application.actorProfile.bio,
+                      profile: {
+                          full_name: application.actorProfile.user.fullName,
+                          email: application.actorProfile.user.email,
+                          phone: application.actorProfile.user.phone,
+                      },
+                      images: (application.actorProfile.images || []).map((image: any) => ({
+                          type: image.type,
+                          image_url: image.imageUrl,
+                      })),
+                  }
+                : undefined,
+            casting_call: application.castingCall
+                ? {
+                      title: application.castingCall.title,
+                  }
+                : undefined,
+        }));
+
+        setProfile({ full_name: profilePayload.profile.fullName });
+        setApplications(apps as ApplicationWithDetails[]);
+        setSelectedApp((apps[0] as ApplicationWithDetails) || null);
         setLoading(false);
     };
 
-    const updateStatus = async (appId: string, status: ApplicationStatus) => {
+    const updateApplication = async (appId: string, updates: Partial<ApplicationWithDetails>) => {
         setUpdating(true);
-        const supabase = createClient();
+        await fetch('/api/caster/applications', {
+            method: 'PATCH',
+            headers: {
+                'Content-Type': 'application/json',
+            },
+            body: JSON.stringify({
+                id: appId,
+                status: updates.status,
+                reviewNotes: updates.review_notes,
+            }),
+        });
 
-        await supabase
-            .from('applications')
-            .update({ status })
-            .eq('id', appId);
-
-        // Update local state
-        setApplications(prev =>
-            prev.map(app =>
-                app.id === appId ? { ...app, status } : app
-            )
+        setApplications((prev) =>
+            prev.map((app) => (app.id === appId ? { ...app, ...updates } : app))
         );
-
-        if (selectedApp?.id === appId) {
-            setSelectedApp(prev => prev ? { ...prev, status } : null);
-        }
-
+        setSelectedApp((prev) => (prev?.id === appId ? { ...prev, ...updates } : prev));
         setUpdating(false);
     };
 
-    const getStatusActions = (currentStatus: ApplicationStatus) => {
-        const actions: { status: ApplicationStatus; label: string; color: string }[] = [];
-
-        if (currentStatus === 'applied') {
-            actions.push({ status: 'shortlisted', label: 'Shortlist', color: 'amber' });
-            actions.push({ status: 'rejected', label: 'Reject', color: 'red' });
-        } else if (currentStatus === 'shortlisted') {
-            actions.push({ status: 'selected', label: 'Select', color: 'emerald' });
-            actions.push({ status: 'rejected', label: 'Reject', color: 'red' });
-        }
-
-        return actions;
+    const getActions = (status: ApplicationStatus) => {
+        if (status === 'applied') return ['shortlisted', 'rejected'] as ApplicationStatus[];
+        if (status === 'shortlisted') return ['selected', 'rejected'] as ApplicationStatus[];
+        return [];
     };
 
+    const centerImage = selectedApp?.actor_profile?.images?.find((image) => image.type === 'center')?.image_url;
+
     if (loading) {
-        return (
-            <div className="min-h-screen bg-neutral-950 flex items-center justify-center">
-                <div className="text-white">Loading...</div>
-            </div>
-        );
+        return <div className="page-shell flex items-center justify-center text-[var(--text)]">Loading review workspace...</div>;
     }
 
-    const centerImage = (images: { type: string; image_url: string }[] | undefined) =>
-        images?.find(img => img.type === 'center')?.image_url;
-
     return (
-        <div className="min-h-screen bg-neutral-950">
+        <div className="page-shell">
             <DashboardNav role="caster" userName={profile?.full_name || 'Caster'} />
 
-            <main className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
-                <h1 className="text-3xl font-bold text-white mb-2">Applications</h1>
-                <p className="text-neutral-400 mb-8">Review actor submissions for your casting calls</p>
-
-                <div className="grid lg:grid-cols-3 gap-8">
-                    {/* Applications List */}
-                    <div className="lg:col-span-2">
-                        {applications.length > 0 ? (
-                            <div className="space-y-4">
-                                {applications.map((app) => (
-                                    <div
-                                        key={app.id}
-                                        onClick={() => setSelectedApp(app)}
-                                        className={`card cursor-pointer transition-all ${selectedApp?.id === app.id
-                                            ? 'border-primary-500 ring-1 ring-primary-500'
-                                            : 'card-hover'
-                                            }`}
-                                    >
-                                        <div className="flex items-center gap-4">
-                                            {/* Avatar */}
-                                            <div className="w-16 h-16 rounded-xl overflow-hidden bg-neutral-800 flex-shrink-0">
-                                                {centerImage(app.actor_profile?.images) ? (
-                                                    <img
-                                                        src={centerImage(app.actor_profile?.images)}
-                                                        alt=""
-                                                        className="w-full h-full object-cover"
-                                                    />
-                                                ) : (
-                                                    <div className="w-full h-full flex items-center justify-center text-2xl">
-                                                        👤
-                                                    </div>
-                                                )}
-                                            </div>
-
-                                            {/* Info */}
-                                            <div className="flex-grow min-w-0">
-                                                <div className="flex items-center gap-2 mb-1">
-                                                    <h3 className="font-semibold text-white truncate">
-                                                        {app.actor_profile?.profile?.full_name || 'Actor'}
-                                                    </h3>
-                                                    <span className={`badge badge-${app.status} text-xs`}>
-                                                        {app.status}
-                                                    </span>
-                                                </div>
-                                                <p className="text-neutral-500 text-sm">
-                                                    For: {app.casting_call?.title}
-                                                </p>
-                                                <p className="text-neutral-600 text-xs mt-1">
-                                                    {app.actor_profile?.age && `${app.actor_profile.age}y`}
-                                                    {app.actor_profile?.gender && ` • ${app.actor_profile.gender}`}
-                                                </p>
-                                            </div>
-
-                                            {/* Actions */}
-                                            <div className="flex gap-2">
-                                                {getStatusActions(app.status).map((action) => (
-                                                    <button
-                                                        key={action.status}
-                                                        onClick={(e) => {
-                                                            e.stopPropagation();
-                                                            updateStatus(app.id, action.status);
-                                                        }}
-                                                        disabled={updating}
-                                                        className={`btn btn-ghost text-xs py-1 px-3 text-${action.color}-400 hover:bg-${action.color}-500/10`}
-                                                    >
-                                                        {action.label}
-                                                    </button>
-                                                ))}
-                                            </div>
-                                        </div>
-                                    </div>
-                                ))}
+            <main className="page-container py-8">
+                <div className="card">
+                    <p className="section-label">Application review</p>
+                    <div className="mt-3 flex flex-col gap-5 lg:flex-row lg:items-end lg:justify-between">
+                        <div>
+                            <h1 className="font-[var(--font-serif)] text-4xl">Review auditions with profile context and clear status controls</h1>
+                            <p className="mt-3 max-w-2xl text-[var(--muted)]">
+                                Move applicants through the pipeline without losing sight of their material, location, or contact privacy rules.
+                            </p>
+                        </div>
+                        <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
+                            <div className="metric">
+                                <p className="metric-label">New</p>
+                                <p className="metric-value">{statusCounts.applied}</p>
                             </div>
-                        ) : (
-                            <div className="card text-center py-16">
-                                <span className="text-5xl mb-4 block">📋</span>
-                                <h3 className="text-xl font-medium text-white mb-2">No applications yet</h3>
-                                <p className="text-neutral-500">Applications will appear here when actors apply</p>
+                            <div className="metric">
+                                <p className="metric-label">Shortlisted</p>
+                                <p className="metric-value">{statusCounts.shortlisted}</p>
                             </div>
-                        )}
+                            <div className="metric">
+                                <p className="metric-label">Selected</p>
+                                <p className="metric-value">{statusCounts.selected}</p>
+                            </div>
+                            <div className="metric">
+                                <p className="metric-label">Rejected</p>
+                                <p className="metric-value">{statusCounts.rejected}</p>
+                            </div>
+                        </div>
                     </div>
+                </div>
 
-                    {/* Actor Detail Panel */}
-                    <div className="lg:col-span-1">
+                <div className="mt-8 grid gap-8 xl:grid-cols-[0.9fr_1.1fr]">
+                    <section className="space-y-4">
+                        {applications.length > 0 ? (
+                            applications.map((application) => (
+                                <button
+                                    key={application.id}
+                                    type="button"
+                                    onClick={() => setSelectedApp(application)}
+                                    className={`card w-full text-left ${selectedApp?.id === application.id ? 'border-[rgba(224,175,86,0.35)]' : ''}`}
+                                >
+                                    <div className="flex items-start justify-between gap-4">
+                                        <div>
+                                            <div className="flex flex-wrap items-center gap-3">
+                                                <p className="text-xl font-semibold text-[var(--text)]">
+                                                    {application.actor_profile?.profile?.full_name || 'Actor'}
+                                                </p>
+                                                <StatusBadge status={application.status} />
+                                            </div>
+                                            <p className="mt-2 text-sm text-[var(--muted)]">
+                                                {application.casting_call?.title} · {application.actor_profile?.location || 'Location not listed'}
+                                            </p>
+                                        </div>
+                                        <p className="text-xs uppercase tracking-[0.16em] text-[var(--muted)]">
+                                            {new Date(application.created_at).toLocaleDateString()}
+                                        </p>
+                                    </div>
+                                </button>
+                            ))
+                        ) : (
+                            <div className="card text-[var(--muted)]">No applications yet. Create or promote a casting call to start reviewing talent.</div>
+                        )}
+                    </section>
+
+                    <aside>
                         {selectedApp ? (
                             <div className="card sticky top-24">
-                                <h2 className="text-lg font-semibold text-white mb-4">Actor Details</h2>
-
-                                {/* Images */}
-                                <div className="grid grid-cols-3 gap-2 mb-4">
-                                    {['left', 'center', 'right'].map((type) => {
-                                        const img = selectedApp.actor_profile?.images?.find(i => i.type === type);
-                                        return (
-                                            <div key={type} className="aspect-square rounded-lg overflow-hidden bg-neutral-800">
-                                                {img ? (
-                                                    <img src={img.image_url} alt={type} className="w-full h-full object-cover" />
-                                                ) : (
-                                                    <div className="w-full h-full flex items-center justify-center text-neutral-600 text-xs">
-                                                        No {type}
-                                                    </div>
-                                                )}
-                                            </div>
-                                        );
-                                    })}
-                                </div>
-
-                                {/* Basic Info */}
-                                <div className="space-y-3 mb-4">
+                                <p className="section-label">Applicant detail</p>
+                                <div className="mt-4 flex items-start justify-between gap-4">
                                     <div>
-                                        <p className="text-neutral-500 text-xs">Name</p>
-                                        <p className="text-white font-medium">{selectedApp.actor_profile?.profile?.full_name}</p>
+                                        <h2 className="font-[var(--font-serif)] text-4xl">
+                                            {selectedApp.actor_profile?.profile?.full_name || 'Actor'}
+                                        </h2>
+                                        <p className="mt-2 text-[var(--muted)]">{selectedApp.casting_call?.title}</p>
                                     </div>
-                                    <div className="grid grid-cols-2 gap-4">
-                                        <div>
-                                            <p className="text-neutral-500 text-xs">Age</p>
-                                            <p className="text-white">{selectedApp.actor_profile?.age || '-'}</p>
-                                        </div>
-                                        <div>
-                                            <p className="text-neutral-500 text-xs">Gender</p>
-                                            <p className="text-white">{selectedApp.actor_profile?.gender || '-'}</p>
-                                        </div>
-                                    </div>
-                                    {selectedApp.actor_profile?.bio && (
-                                        <div>
-                                            <p className="text-neutral-500 text-xs">Bio</p>
-                                            <p className="text-neutral-300 text-sm">{selectedApp.actor_profile.bio}</p>
-                                        </div>
-                                    )}
+                                    <StatusBadge status={selectedApp.status} />
                                 </div>
 
-                                {/* Video */}
-                                {selectedApp.audition_video_url && (
-                                    <div className="mb-4">
-                                        <p className="text-neutral-500 text-xs mb-2">Audition Video</p>
+                                <div className="mt-6 grid gap-4 md:grid-cols-[0.9fr_1.1fr]">
+                                    <div className="overflow-hidden rounded-[1.5rem] border border-white/8 bg-white/3">
+                                        {centerImage ? (
+                                            <img src={centerImage} alt="Actor headshot" className="h-full w-full object-cover" />
+                                        ) : (
+                                            <div className="flex aspect-[0.78] items-center justify-center text-sm text-[var(--muted)]">No center headshot</div>
+                                        )}
+                                    </div>
+                                    <div className="space-y-3">
+                                        <div className="rounded-[1.25rem] border border-white/8 bg-white/3 px-4 py-3 text-sm text-[var(--text)]">
+                                            Age: {selectedApp.actor_profile?.age || 'Not listed'}
+                                        </div>
+                                        <div className="rounded-[1.25rem] border border-white/8 bg-white/3 px-4 py-3 text-sm text-[var(--text)]">
+                                            Gender: {selectedApp.actor_profile?.gender || 'Not listed'}
+                                        </div>
+                                        <div className="rounded-[1.25rem] border border-white/8 bg-white/3 px-4 py-3 text-sm text-[var(--text)]">
+                                            Location: {selectedApp.actor_profile?.location || 'Not listed'}
+                                        </div>
+                                    </div>
+                                </div>
+
+                                {selectedApp.actor_profile?.bio ? (
+                                    <div className="mt-6 rounded-[1.5rem] border border-white/8 bg-white/3 p-5">
+                                        <p className="section-label">Bio</p>
+                                        <p className="mt-3 text-sm leading-7 text-[var(--text)]">{selectedApp.actor_profile.bio}</p>
+                                    </div>
+                                ) : null}
+
+                                {selectedApp.notes ? (
+                                    <div className="mt-6 rounded-[1.5rem] border border-white/8 bg-white/3 p-5">
+                                        <p className="section-label">Actor note</p>
+                                        <p className="mt-3 text-sm leading-7 text-[var(--text)]">{selectedApp.notes}</p>
+                                    </div>
+                                ) : null}
+
+                                <div className="mt-6">
+                                    <label className="mb-2 block text-sm font-medium text-[var(--text)]">Internal review note</label>
+                                    <textarea
+                                        className="textarea"
+                                        value={reviewNotes}
+                                        onChange={(e) => setReviewNotes(e.target.value)}
+                                        placeholder="Capture fit, concerns, or next-step notes for your team."
+                                    />
+                                    <button
+                                        type="button"
+                                        onClick={() => updateApplication(selectedApp.id, { review_notes: reviewNotes })}
+                                        disabled={updating}
+                                        className="btn btn-secondary mt-3"
+                                    >
+                                        Save note
+                                    </button>
+                                </div>
+
+                                <div className="mt-6 flex flex-col gap-3 md:flex-row">
+                                    {selectedApp.audition_video_url ? (
                                         <a
                                             href={selectedApp.audition_video_url}
                                             target="_blank"
                                             rel="noopener noreferrer"
-                                            className="btn btn-secondary w-full"
+                                            className="btn btn-primary"
                                         >
-                                            🎬 Watch Video
+                                            Open audition
                                         </a>
-                                    </div>
-                                )}
+                                    ) : (
+                                        <span className="btn btn-secondary">No audition link provided</span>
+                                    )}
 
-                                {/* Contact Info (only if selected) */}
-                                {selectedApp.status === 'selected' && (
-                                    <div className="p-3 rounded-xl bg-emerald-500/10 border border-emerald-500/30">
-                                        <p className="text-emerald-300 text-xs font-medium mb-2">Contact Information</p>
-                                        <p className="text-white text-sm">{selectedApp.actor_profile?.profile?.email}</p>
-                                        {selectedApp.actor_profile?.profile?.phone && (
-                                            <p className="text-white text-sm">{selectedApp.actor_profile.profile.phone}</p>
-                                        )}
-                                    </div>
-                                )}
-
-                                {/* Status Actions */}
-                                <div className="mt-4 flex gap-2">
-                                    {getStatusActions(selectedApp.status).map((action) => (
+                                    {getActions(selectedApp.status).map((status) => (
                                         <button
-                                            key={action.status}
-                                            onClick={() => updateStatus(selectedApp.id, action.status)}
+                                            key={status}
+                                            type="button"
                                             disabled={updating}
-                                            className={`btn flex-1 ${action.color === 'emerald' ? 'btn-primary' :
-                                                action.color === 'amber' ? 'btn-accent' :
-                                                    'btn-secondary text-red-400'
-                                                }`}
+                                            onClick={() => updateApplication(selectedApp.id, { status })}
+                                            className={`btn ${status === 'selected' ? 'btn-primary' : status === 'shortlisted' ? 'btn-secondary' : 'btn-ghost'}`}
                                         >
-                                            {action.label}
+                                            {status === 'selected' ? 'Select actor' : status === 'shortlisted' ? 'Shortlist' : 'Reject'}
                                         </button>
                                     ))}
                                 </div>
+
+                                {selectedApp.status === 'selected' ? (
+                                    <div className="mt-6 rounded-[1.5rem] border border-[rgba(84,176,138,0.3)] bg-[rgba(84,176,138,0.1)] p-5 text-sm text-[#a9e7cb]">
+                                        <p className="font-semibold">Contact sharing unlocked</p>
+                                        <p className="mt-2">{selectedApp.actor_profile?.profile?.email}</p>
+                                        {selectedApp.actor_profile?.profile?.phone ? <p>{selectedApp.actor_profile.profile.phone}</p> : null}
+                                    </div>
+                                ) : null}
                             </div>
                         ) : (
-                            <div className="card text-center py-12 text-neutral-500">
-                                <span className="text-3xl mb-2 block">👆</span>
-                                <p className="text-sm">Select an application to view details</p>
-                            </div>
+                            <div className="card text-[var(--muted)]">Select an applicant to open the full review panel.</div>
                         )}
-                    </div>
+                    </aside>
                 </div>
             </main>
         </div>

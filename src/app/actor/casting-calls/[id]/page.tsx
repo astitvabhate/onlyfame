@@ -1,8 +1,11 @@
-
-import { createClient } from '@/lib/supabase/server';
-import { redirect, notFound } from 'next/navigation';
 import Link from 'next/link';
+import { redirect } from 'next/navigation';
 import { DashboardNav } from '@/components/DashboardNav';
+import { ProgressChecklist } from '@/components/ProgressChecklist';
+import { StatusBadge } from '@/components/StatusBadge';
+import { computeActorFit, getActorProfileChecklist, getTrustSummary } from '@/lib/workflows';
+import { requireRole } from '@/lib/session';
+import { prisma } from '@/lib/prisma';
 
 interface PageProps {
     params: Promise<{ id: string }>;
@@ -10,217 +13,238 @@ interface PageProps {
 
 export default async function CastingCallDetailPage({ params }: PageProps) {
     const { id } = await params;
-    const supabase = await createClient();
+    const user = await requireRole('actor');
+    const actorProfile = await prisma.actorProfile.findUnique({
+        where: { userId: user.id },
+        include: { images: true },
+    });
 
-    const { data: { user } } = await supabase.auth.getUser();
-    if (!user) redirect('/auth/login');
+    const castingCall = await prisma.castingCall.findUnique({
+        where: { id },
+        include: { castingProfile: true },
+    });
 
-    const { data: profile } = await supabase
-        .from('profiles')
-        .select('*')
-        .eq('id', user.id)
-        .single();
-
-    const { data: actorProfile } = await supabase
-        .from('actor_profiles')
-        .select('*')
-        .eq('user_id', user.id)
-        .single();
-
-    // Get the casting call
-    const { data: castingCall, error } = await supabase
-        .from('casting_calls')
-        .select(`
-            *,
-            casting_profile:casting_profiles(
-                company_name,
-                verified,
-                website,
-                description
-            )
-        `)
-        .eq('id', id)
-        .single();
-
-    if (error) {
-        console.error('Error fetching casting call:', error);
+    if (!castingCall) {
+        redirect('/actor/casting-calls');
     }
 
-    if (error || !castingCall) {
-        return (
-            <div className="min-h-screen bg-neutral-950 flex items-center justify-center p-4">
-                <div className="card max-w-lg w-full border-red-500/30 bg-red-500/10">
-                    <h1 className="text-xl font-bold text-red-400 mb-2">Failed to Load Casting Call</h1>
-                    <p className="text-neutral-300 mb-4">
-                        We could not find the casting call with ID: <code className="bg-black/30 p-1 rounded">{id}</code>
-                    </p>
-                    <div className="p-4 bg-black/50 rounded font-mono text-sm text-red-200 overflow-auto">
-                        {error ? JSON.stringify(error, null, 2) : 'No data returned (likely filters or is_active=false)'}
-                    </div>
-                    <Link href="/actor/casting-calls" className="btn btn-primary mt-6 w-full text-center">
-                        Back to List
-                    </Link>
-                </div>
-            </div>
-        );
-    }
+    const existingApplication = actorProfile
+        ? await prisma.application.findUnique({
+              where: {
+                  castingCallId_actorId: {
+                      castingCallId: id,
+                      actorId: actorProfile.id,
+                  },
+              },
+          })
+        : null;
 
-    // Check if actor already applied (only if actor profile exists)
-    let existingApplication = null;
-    if (actorProfile) {
-        const { data: appData, error: appError } = await supabase
-            .from('applications')
-            .select('id, status, created_at')
-            .eq('casting_call_id', id)
-            .eq('actor_id', actorProfile.id)
-            .maybeSingle(); // Use maybeSingle to avoid 406/JSON errors if multiple/none
-
-        if (appError) {
-            console.error('Error fetching application:', appError);
-        }
-        existingApplication = appData;
-    }
-
-    const requirements = castingCall.requirements as Record<string, unknown> || {};
+    const requirements = (castingCall.requirements || {}) as Record<string, any>;
+    const readiness = getActorProfileChecklist(
+        actorProfile
+            ? {
+                  ...actorProfile,
+                  user_id: actorProfile.userId,
+                  past_works: actorProfile.pastWorks as any[],
+              }
+            : null,
+        (actorProfile?.images || []).map((image) => ({ ...image, actor_id: image.actorId, image_url: image.imageUrl }))
+    );
+    const fit = computeActorFit(
+        actorProfile
+            ? {
+                  ...actorProfile,
+                  user_id: actorProfile.userId,
+                  past_works: actorProfile.pastWorks as any[],
+              }
+            : null,
+        {
+            ...castingCall,
+            requirements: (castingCall.requirements || {}) as any,
+            caster_id: castingCall.casterId,
+            sample_script_url: castingCall.sampleScriptUrl,
+            voice_note_url: castingCall.voiceNoteUrl,
+            project_type: castingCall.projectType,
+            shoot_location: castingCall.shootLocation,
+            compensation_details: castingCall.compensationDetails,
+            audition_instructions: castingCall.auditionInstructions,
+            submission_checklist: castingCall.submissionChecklist,
+        } as any
+    );
+    const trust = getTrustSummary(castingCall.castingProfile as any);
 
     return (
-        <div className="min-h-screen bg-neutral-950">
-            <DashboardNav role="actor" userName={profile?.full_name || 'Actor'} />
+        <div className="page-shell">
+            <DashboardNav role="actor" userName={user.fullName || 'Actor'} />
 
-            <main className="max-w-4xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
-                {/* Back link */}
-                <Link
-                    href="/actor/casting-calls"
-                    className="inline-flex items-center text-neutral-400 hover:text-white mb-6 transition-colors"
-                >
-                    ← Back to Casting Calls
+            <main className="page-container py-8">
+                <Link href="/actor/casting-calls" className="btn btn-ghost px-0">
+                    Back to open calls
                 </Link>
 
-                {/* Main Card */}
-                <div className="card mb-6">
-                    {/* Header */}
-                    <div className="flex items-start justify-between mb-6">
-                        <div>
-                            <h1 className="text-2xl md:text-3xl font-bold text-white mb-2">
-                                {castingCall.title}
-                            </h1>
-                            <div className="flex items-center gap-3">
-                                <span className="text-neutral-400">
-                                    {castingCall.casting_profile?.company_name}
-                                </span>
-                                {castingCall.casting_profile?.verified && (
-                                    <span className="badge badge-success">✓ Verified</span>
-                                )}
-                            </div>
-                        </div>
+                <div className="mt-6 grid gap-8 xl:grid-cols-[1.15fr_0.85fr]">
+                    <section className="space-y-8">
+                        <div className="card">
+                            <div className="flex flex-col gap-5 lg:flex-row lg:items-start lg:justify-between">
+                                <div>
+                                    <div className="flex flex-wrap items-center gap-2">
+                                        <span className="badge badge-neutral">{castingCall.projectType || 'Open project'}</span>
+                                        {castingCall.castingProfile?.verified ? <span className="badge badge-success">Verified team</span> : null}
+                                    </div>
+                                    <h1 className="mt-4 font-[var(--font-serif)] text-5xl">{castingCall.title}</h1>
+                                    <p className="mt-3 text-lg text-[var(--muted)]">
+                                        {castingCall.castingProfile?.companyName || 'Casting team'}
+                                    </p>
+                                </div>
 
-                        {existingApplication ? (
-                            <div className="text-right">
-                                <span className={`badge badge-${existingApplication.status}`}>
-                                    {existingApplication.status.charAt(0).toUpperCase() + existingApplication.status.slice(1)}
-                                </span>
-                                <p className="text-neutral-500 text-xs mt-1">
-                                    Applied {new Date(existingApplication.created_at).toLocaleDateString()}
+                                <div className="rounded-[1.5rem] border border-white/8 bg-white/3 p-5 lg:max-w-xs">
+                                    <p className="text-xs uppercase tracking-[0.16em] text-[var(--muted)]">Your current fit</p>
+                                    <p className="mt-2 text-4xl font-semibold">{fit.score}%</p>
+                                    <div className="mt-3 space-y-2 text-sm text-[var(--muted)]">
+                                        {fit.reasons.length ? fit.reasons.map((reason) => <p key={reason}>• {reason}</p>) : <p>Complete more of your profile to improve signal strength.</p>}
+                                    </div>
+                                </div>
+                            </div>
+
+                            <div className="mt-8 grid gap-4 md:grid-cols-3">
+                                <div className="metric">
+                                    <p className="metric-label">Review style</p>
+                                    <p className="metric-value text-2xl">{castingCall.deadline ? 'Deadline-based' : 'Rolling'}</p>
+                                    <p className="metric-note">
+                                        {castingCall.deadline ? new Date(castingCall.deadline).toLocaleDateString() : 'Applications reviewed as they come in.'}
+                                    </p>
+                                </div>
+                                <div className="metric">
+                                    <p className="metric-label">Shoot location</p>
+                                    <p className="metric-value text-2xl">{castingCall.shootLocation || 'Not listed'}</p>
+                                    <p className="metric-note">Travel expectations should be confirmed before final selection.</p>
+                                </div>
+                                <div className="metric">
+                                    <p className="metric-label">Compensation</p>
+                                    <p className="metric-value text-2xl">{castingCall.compensationDetails || 'Shared later'}</p>
+                                    <p className="metric-note">Protected details can be clarified if you are shortlisted.</p>
+                                </div>
+                            </div>
+
+                            <div className="divider my-8" />
+
+                            <div>
+                                <p className="section-label">Role brief</p>
+                                <p className="mt-4 whitespace-pre-wrap text-base leading-8 text-[var(--text)]">
+                                    {castingCall.description || 'No role summary has been provided yet.'}
                                 </p>
                             </div>
-                        ) : castingCall.is_active ? (
-                            <Link
-                                href={`/actor/casting-calls/${id}/apply`}
-                                className="btn btn-primary"
-                            >
-                                Apply Now
-                            </Link>
-                        ) : (
-                            <span className="badge bg-neutral-700 text-neutral-400">Closed</span>
-                        )}
-                    </div>
 
-                    {/* Description */}
-                    <div className="mb-6">
-                        <h2 className="text-lg font-semibold text-white mb-3">About This Role</h2>
-                        <p className="text-neutral-300 whitespace-pre-wrap leading-relaxed">
-                            {castingCall.description || 'No description provided.'}
-                        </p>
-                    </div>
-
-                    {/* Requirements */}
-                    {Object.keys(requirements).length > 0 && (
-                        <div className="mb-6 p-4 rounded-xl bg-neutral-800/50 border border-neutral-700">
-                            <h2 className="text-lg font-semibold text-white mb-4">Requirements</h2>
-                            <div className="grid sm:grid-cols-2 gap-4">
+                            <div className="mt-8 grid gap-4 md:grid-cols-2">
                                 {requirements.age_range ? (
-                                    <div>
-                                        <span className="text-neutral-500 text-sm">Age Range</span>
-                                        <p className="text-white">
-                                            {String((requirements.age_range as { min: number; max: number }).min)} - {String((requirements.age_range as { min: number; max: number }).max)} years
+                                    <div className="surface-soft p-5">
+                                        <p className="section-label">Age range</p>
+                                        <p className="mt-3 text-lg text-[var(--text)]">
+                                            {String(requirements.age_range.min)} to {String(requirements.age_range.max)}
                                         </p>
                                     </div>
                                 ) : null}
-
                                 {requirements.gender ? (
-                                    <div>
-                                        <span className="text-neutral-500 text-sm">Gender</span>
-                                        <p className="text-white">
-                                            {Array.isArray(requirements.gender)
-                                                ? (requirements.gender as string[]).join(', ')
-                                                : String(requirements.gender)}
+                                    <div className="surface-soft p-5">
+                                        <p className="section-label">Gender preference</p>
+                                        <p className="mt-3 text-lg text-[var(--text)]">
+                                            {Array.isArray(requirements.gender) ? requirements.gender.join(', ') : String(requirements.gender)}
                                         </p>
                                     </div>
                                 ) : null}
-
-                                {requirements.experience_level ? (
-                                    <div>
-                                        <span className="text-neutral-500 text-sm">Experience</span>
-                                        <p className="text-white capitalize">{String(requirements.experience_level)}</p>
-                                    </div>
-                                ) : null}
-
                                 {requirements.languages ? (
-                                    <div>
-                                        <span className="text-neutral-500 text-sm">Languages</span>
-                                        <p className="text-white">
-                                            {Array.isArray(requirements.languages)
-                                                ? (requirements.languages as string[]).join(', ')
-                                                : String(requirements.languages)}
+                                    <div className="surface-soft p-5">
+                                        <p className="section-label">Languages</p>
+                                        <p className="mt-3 text-lg text-[var(--text)]">
+                                            {Array.isArray(requirements.languages) ? requirements.languages.join(', ') : String(requirements.languages)}
                                         </p>
+                                    </div>
+                                ) : null}
+                                {requirements.location ? (
+                                    <div className="surface-soft p-5">
+                                        <p className="section-label">Preferred region</p>
+                                        <p className="mt-3 text-lg text-[var(--text)]">{String(requirements.location)}</p>
                                     </div>
                                 ) : null}
                             </div>
                         </div>
-                    )}
+                    </section>
 
-                    {/* Dates */}
-                    <div className="flex flex-wrap gap-6 text-sm">
-                        <div>
-                            <span className="text-neutral-500">Posted</span>
-                            <p className="text-neutral-300">{new Date(castingCall.created_at).toLocaleDateString()}</p>
-                        </div>
-                        {castingCall.deadline && (
-                            <div>
-                                <span className="text-neutral-500">Deadline</span>
-                                <p className="text-neutral-300">{new Date(castingCall.deadline).toLocaleDateString()}</p>
+                    <aside className="space-y-8">
+                        <div className="card">
+                            <p className="section-label">Submission status</p>
+                            <div className="mt-4">
+                                {existingApplication ? (
+                                    <>
+                                        <StatusBadge status={existingApplication.status as any} />
+                                        <p className="mt-3 text-sm text-[var(--muted)]">
+                                            Submitted on {new Date(existingApplication.createdAt).toLocaleDateString()}.
+                                        </p>
+                                    </>
+                                ) : (
+                                    <p className="text-sm text-[var(--muted)]">
+                                        You have not applied yet. Use the readiness and checklist below to judge whether now is the right time.
+                                    </p>
+                                )}
                             </div>
-                        )}
-                    </div>
-                </div>
 
-                {/* About the Caster */}
-                {castingCall.casting_profile?.description && (
-                    <div className="card">
-                        <h2 className="text-lg font-semibold text-white mb-3">About the Caster</h2>
-                        <p className="text-neutral-400 mb-4">{castingCall.casting_profile.description}</p>
-                        {castingCall.casting_profile.website && (
-                            <a
-                                href={castingCall.casting_profile.website}
-                                target="_blank"
-                                rel="noopener noreferrer"
-                                className="text-primary-400 hover:text-primary-300 text-sm"
-                            >
-                                Visit Website →
-                            </a>
-                        )}
-                    </div>
-                )}
+                            <div className="mt-6 space-y-3">
+                                {castingCall.submissionChecklist?.length ? (
+                                    castingCall.submissionChecklist.map((item) => (
+                                        <div key={item} className="rounded-[1.25rem] border border-white/8 bg-white/3 px-4 py-3 text-sm text-[var(--text)]">
+                                            {item}
+                                        </div>
+                                    ))
+                                ) : (
+                                    <div className="rounded-[1.25rem] border border-white/8 bg-white/3 px-4 py-3 text-sm text-[var(--muted)]">
+                                        No explicit checklist supplied. Share a strong message and a reliable audition link.
+                                    </div>
+                                )}
+                            </div>
+
+                            {!existingApplication && castingCall.isActive ? (
+                                <Link
+                                    href={`/actor/casting-calls/${id}/apply`}
+                                    className={`mt-6 btn w-full ${readiness.readyToApply ? 'btn-primary' : 'btn-secondary'}`}
+                                >
+                                    {readiness.readyToApply ? 'Start your submission' : 'Apply anyway with current profile'}
+                                </Link>
+                            ) : null}
+                        </div>
+
+                        <ProgressChecklist
+                            title="Your submission readiness"
+                            percent={readiness.percent}
+                            items={readiness.checks}
+                            note="A stronger profile improves both fit confidence and review speed."
+                        />
+
+                        <div className="card">
+                            <p className="section-label">Trust cues</p>
+                            <h2 className="mt-3 panel-title">Before you share an audition</h2>
+                            <div className="mt-5 space-y-3">
+                                {trust.cues.map((cue) => (
+                                    <div key={cue} className="rounded-[1.25rem] border border-white/8 bg-white/3 px-4 py-3 text-sm text-[var(--text)]">
+                                        {cue}
+                                    </div>
+                                ))}
+                            </div>
+                            {castingCall.castingProfile?.trustNote ? (
+                                <p className="mt-4 text-sm text-[var(--muted)]">{castingCall.castingProfile.trustNote}</p>
+                            ) : null}
+                            {castingCall.castingProfile?.website ? (
+                                <a
+                                    href={castingCall.castingProfile.website}
+                                    target="_blank"
+                                    rel="noopener noreferrer"
+                                    className="mt-5 inline-flex text-sm text-[var(--accent)]"
+                                >
+                                    Visit company website
+                                </a>
+                            ) : null}
+                        </div>
+                    </aside>
+                </div>
             </main>
         </div>
     );

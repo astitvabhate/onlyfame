@@ -1,32 +1,27 @@
-import { createClient } from '@/lib/supabase/server';
 import { redirect } from 'next/navigation';
 import { ProfileSetupLoading } from '@/components/ProfileSetupLoading';
+import { auth } from '@/auth';
+import { prisma } from '@/lib/prisma';
 
 export default async function CasterLayout({
     children,
 }: {
     children: React.ReactNode;
 }) {
-    const supabase = await createClient();
+    const session = await auth();
+    if (!session?.user?.id) redirect('/auth/login');
 
-    const { data: { user } } = await supabase.auth.getUser();
-    if (!user) redirect('/auth/login');
+    const user = await prisma.user.findUnique({
+        where: { id: session.user.id },
+        select: { role: true },
+    });
 
-    const { data: profile } = await supabase
-        .from('profiles')
-        .select('role')
-        .eq('id', user.id)
-        .single();
-
-    if (!profile) {
-        // Profile might be creating via trigger (race condition)
+    if (!user) {
         return <ProfileSetupLoading />;
     }
 
-    if (profile.role === 'actor') {
+    if (user.role === 'actor') {
         redirect('/actor/dashboard');
-    } else if (profile.role !== 'caster') {
-        redirect('/auth/login');
     }
 
     return <>{children}</>;

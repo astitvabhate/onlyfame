@@ -1,9 +1,9 @@
 'use client';
 
-import { useState, useEffect, Suspense } from 'react';
+import { Suspense, useEffect, useState } from 'react';
 import Link from 'next/link';
 import { useRouter, useSearchParams } from 'next/navigation';
-import { createClient } from '@/lib/supabase/client';
+import { signIn } from 'next-auth/react';
 import type { UserRole } from '@/types';
 
 function RegisterContent() {
@@ -28,110 +28,118 @@ function RegisterContent() {
         setError('');
         setLoading(true);
 
-        const supabase = createClient();
-
-        // Sign up with Supabase Auth
-        const { data, error: authError } = await supabase.auth.signUp({
-            email,
-            password,
-            options: {
-                data: {
-                    full_name: fullName,
-                    role: role,
-                },
+        const response = await fetch('/api/auth/register', {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json',
             },
+            body: JSON.stringify({
+                fullName,
+                email,
+                password,
+                role,
+            }),
         });
 
-        if (authError) {
-            setError(authError.message);
+        const payload = await response.json();
+        if (!response.ok) {
+            setError(payload.error || 'Registration failed.');
             setLoading(false);
             return;
         }
 
-        if (data.user) {
-            // The profile and role-specific profiles are now created automatically 
-            // by a database trigger (on_auth_user_created) in Supabase.
-            // We just need to redirect the user to the appropriate page.
-
-            if (role === 'actor') {
-                router.push('/actor/dashboard');
-            } else {
-                router.push('/caster/dashboard');
-            }
-        }
+        await signIn('credentials', {
+            email,
+            password,
+            redirect: false,
+        });
+        router.refresh();
+        router.push(role === 'actor' ? '/actor/dashboard' : '/caster/dashboard');
     };
 
     return (
-        <div className="min-h-screen gradient-animated flex items-center justify-center px-4 py-12">
-            {/* Background decorations */}
-            <div className="absolute top-1/4 left-10 w-72 h-72 bg-primary-500/20 rounded-full blur-3xl"></div>
-            <div className="absolute bottom-1/4 right-10 w-72 h-72 bg-accent-500/10 rounded-full blur-3xl"></div>
-
-            <div className="w-full max-w-md relative z-10">
-                {/* Logo */}
-                <div className="text-center mb-8">
-                    <Link href="/" className="inline-flex items-center gap-2">
-                        <div className="w-12 h-12 rounded-xl bg-gradient-to-br from-primary-500 to-primary-700 flex items-center justify-center">
-                            <span className="text-2xl">⭐</span>
+        <div className="page-shell">
+            <div className="page-container grid min-h-screen gap-10 py-8 lg:grid-cols-[0.95fr_1.05fr] lg:items-center">
+                <div className="hidden lg:block">
+                    <span className="eyebrow">Guided onboarding for both sides of casting</span>
+                    <h1 className="mt-8 font-[var(--font-serif)] text-6xl leading-[1.02]">
+                        Build a profile people can trust before the first message is sent.
+                    </h1>
+                    <p className="mt-6 max-w-xl text-lg leading-8 text-[var(--muted)]">
+                        New members enter through guided activation. Actors prepare headshots and profile context.
+                        Casting teams set up company identity, verification cues, and their first brief.
+                    </p>
+                    <div className="mt-10 space-y-4 max-w-xl">
+                        <div className="surface-soft p-5">
+                            <p className="section-label">Actor onboarding</p>
+                            <p className="mt-3 text-[var(--text)]">Profile basics, headshots, languages, location, and readiness before applying.</p>
                         </div>
-                        <span className="text-2xl font-bold bg-gradient-to-r from-white to-neutral-300 bg-clip-text text-transparent">
-                            ONLYFAME
-                        </span>
-                    </Link>
+                        <div className="surface-soft p-5">
+                            <p className="section-label">Casting onboarding</p>
+                            <p className="mt-3 text-[var(--text)]">Company identity, trust cues, and a structured first casting call.</p>
+                        </div>
+                    </div>
                 </div>
 
-                {/* Register Card */}
-                <div className="card">
-                    <h1 className="text-2xl font-bold text-white text-center mb-2">Create Your Account</h1>
-                    <p className="text-neutral-400 text-center mb-8">Join the future of casting</p>
+                <div className="mx-auto w-full max-w-xl card">
+                    <Link href="/" className="inline-flex items-center gap-3">
+                        <div className="flex h-11 w-11 items-center justify-center rounded-full border border-[rgba(224,175,86,0.35)] bg-[rgba(224,175,86,0.08)] text-sm font-semibold text-[var(--accent)]">
+                            OF
+                        </div>
+                        <div>
+                            <p className="font-[var(--font-serif)] text-2xl tracking-[0.08em]">ONLYFAME</p>
+                            <p className="text-xs uppercase tracking-[0.18em] text-[var(--muted)]">Create your workspace</p>
+                        </div>
+                    </Link>
 
-                    <form onSubmit={handleRegister} className="space-y-6">
-                        {error && (
-                            <div className="p-4 rounded-xl bg-red-500/10 border border-red-500/30 text-red-300 text-sm">
+                    <div className="mt-8">
+                        <p className="section-label">Registration</p>
+                        <h2 className="mt-3 font-[var(--font-serif)] text-4xl">Create your account</h2>
+                        <p className="mt-3 text-sm text-[var(--muted)]">
+                            Choose the side of the workflow you are entering first. You can still collaborate across the platform later.
+                        </p>
+                    </div>
+
+                    <form onSubmit={handleRegister} className="mt-8 space-y-5">
+                        {error ? (
+                            <div className="rounded-2xl border border-[rgba(214,106,94,0.3)] bg-[rgba(214,106,94,0.1)] px-4 py-3 text-sm text-[#efb3ac]">
                                 {error}
                             </div>
-                        )}
+                        ) : null}
 
-                        {/* Role Selection */}
-                        <div>
-                            <label className="block text-sm font-medium text-neutral-300 mb-3">
-                                I am a...
-                            </label>
-                            <div className="grid grid-cols-2 gap-4">
-                                <button
-                                    type="button"
-                                    onClick={() => setRole('actor')}
-                                    className={`p-4 rounded-xl border-2 transition-all ${role === 'actor'
-                                        ? 'border-primary-500 bg-primary-500/10'
-                                        : 'border-neutral-700 bg-neutral-800/50 hover:border-neutral-600'
-                                        }`}
-                                >
-                                    <div className="text-3xl mb-2">🎭</div>
-                                    <div className={`font-semibold ${role === 'actor' ? 'text-primary-300' : 'text-white'}`}>
-                                        Actor
-                                    </div>
-                                    <div className="text-xs text-neutral-500 mt-1">Looking for roles</div>
-                                </button>
-                                <button
-                                    type="button"
-                                    onClick={() => setRole('caster')}
-                                    className={`p-4 rounded-xl border-2 transition-all ${role === 'caster'
-                                        ? 'border-primary-500 bg-primary-500/10'
-                                        : 'border-neutral-700 bg-neutral-800/50 hover:border-neutral-600'
-                                        }`}
-                                >
-                                    <div className="text-3xl mb-2">🎬</div>
-                                    <div className={`font-semibold ${role === 'caster' ? 'text-primary-300' : 'text-white'}`}>
-                                        Casting Director
-                                    </div>
-                                    <div className="text-xs text-neutral-500 mt-1">Finding talent</div>
-                                </button>
-                            </div>
+                        <div className="grid gap-4 sm:grid-cols-2">
+                            <button
+                                type="button"
+                                onClick={() => setRole('actor')}
+                                className={`rounded-[1.5rem] border p-5 text-left ${
+                                    role === 'actor'
+                                        ? 'border-[rgba(224,175,86,0.4)] bg-[rgba(224,175,86,0.08)]'
+                                        : 'border-white/8 bg-white/3'
+                                }`}
+                            >
+                                <p className="section-label">Actor</p>
+                                <p className="mt-3 text-lg font-semibold text-[var(--text)]">Show your fit with confidence</p>
+                                <p className="mt-2 text-sm text-[var(--muted)]">Prepare a role-ready profile and track your auditions clearly.</p>
+                            </button>
+
+                            <button
+                                type="button"
+                                onClick={() => setRole('caster')}
+                                className={`rounded-[1.5rem] border p-5 text-left ${
+                                    role === 'caster'
+                                        ? 'border-[rgba(108,157,202,0.35)] bg-[rgba(108,157,202,0.08)]'
+                                        : 'border-white/8 bg-white/3'
+                                }`}
+                            >
+                                <p className="section-label">Casting team</p>
+                                <p className="mt-3 text-lg font-semibold text-[var(--text)]">Review talent with structure</p>
+                                <p className="mt-2 text-sm text-[var(--muted)]">Publish better briefs and manage applicants in one workflow.</p>
+                            </button>
                         </div>
 
                         <div>
-                            <label htmlFor="fullName" className="block text-sm font-medium text-neutral-300 mb-2">
-                                Full Name
+                            <label htmlFor="fullName" className="mb-2 block text-sm font-medium text-[var(--text)]">
+                                Full name
                             </label>
                             <input
                                 id="fullName"
@@ -139,14 +147,14 @@ function RegisterContent() {
                                 value={fullName}
                                 onChange={(e) => setFullName(e.target.value)}
                                 className="input"
-                                placeholder="Your full name"
+                                placeholder={role === 'actor' ? 'Your name as seen by casting teams' : 'Your full name'}
                                 required
                             />
                         </div>
 
                         <div>
-                            <label htmlFor="email" className="block text-sm font-medium text-neutral-300 mb-2">
-                                Email Address
+                            <label htmlFor="email" className="mb-2 block text-sm font-medium text-[var(--text)]">
+                                Work email
                             </label>
                             <input
                                 id="email"
@@ -154,13 +162,13 @@ function RegisterContent() {
                                 value={email}
                                 onChange={(e) => setEmail(e.target.value)}
                                 className="input"
-                                placeholder="you@example.com"
+                                placeholder="name@studio.com"
                                 required
                             />
                         </div>
 
                         <div>
-                            <label htmlFor="password" className="block text-sm font-medium text-neutral-300 mb-2">
+                            <label htmlFor="password" className="mb-2 block text-sm font-medium text-[var(--text)]">
                                 Password
                             </label>
                             <input
@@ -169,40 +177,31 @@ function RegisterContent() {
                                 value={password}
                                 onChange={(e) => setPassword(e.target.value)}
                                 className="input"
-                                placeholder="••••••••"
+                                placeholder="Minimum 6 characters"
                                 minLength={6}
                                 required
                             />
-                            <p className="text-xs text-neutral-500 mt-1">Minimum 6 characters</p>
+                        </div>
+
+                        <div className="rounded-[1.5rem] border border-white/8 bg-white/3 p-4 text-sm text-[var(--muted)]">
+                            Contact details stay protected inside the platform until the right stage in the audition process.
                         </div>
 
                         <button
                             type="submit"
                             disabled={loading}
-                            className="btn btn-primary w-full py-4 text-lg disabled:opacity-50 disabled:cursor-not-allowed"
+                            className="btn btn-primary w-full disabled:cursor-not-allowed disabled:opacity-60"
                         >
-                            {loading ? (
-                                <span className="flex items-center gap-2">
-                                    <svg className="animate-spin h-5 w-5" viewBox="0 0 24 24">
-                                        <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" fill="none" />
-                                        <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z" />
-                                    </svg>
-                                    Creating account...
-                                </span>
-                            ) : (
-                                `Create ${role === 'actor' ? 'Actor' : 'Casting'} Account`
-                            )}
+                            {loading ? 'Creating account...' : `Create ${role === 'actor' ? 'actor' : 'casting'} workspace`}
                         </button>
                     </form>
 
-                    <div className="mt-8 text-center">
-                        <p className="text-neutral-400">
-                            Already have an account?{' '}
-                            <Link href="/auth/login" className="text-primary-400 hover:text-primary-300 font-medium">
-                                Sign in
-                            </Link>
-                        </p>
-                    </div>
+                    <p className="mt-8 text-sm text-[var(--muted)]">
+                        Already have an account?{' '}
+                        <Link href="/auth/login" className="text-[var(--text)] underline decoration-[rgba(224,175,86,0.6)] underline-offset-4">
+                            Sign in
+                        </Link>
+                    </p>
                 </div>
             </div>
         </div>
@@ -211,11 +210,7 @@ function RegisterContent() {
 
 export default function RegisterPage() {
     return (
-        <Suspense fallback={
-            <div className="min-h-screen gradient-animated flex items-center justify-center text-white">
-                Loading...
-            </div>
-        }>
+        <Suspense fallback={<div className="page-shell flex items-center justify-center text-[var(--text)]">Loading...</div>}>
             <RegisterContent />
         </Suspense>
     );

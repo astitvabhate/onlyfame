@@ -1,11 +1,11 @@
 'use client';
 
-import { useState, useEffect } from 'react';
+import { use, useEffect, useMemo, useState } from 'react';
 import { useRouter } from 'next/navigation';
-import { use } from 'react';
 import Link from 'next/link';
-import { createClient } from '@/lib/supabase/client';
 import { DashboardNav } from '@/components/DashboardNav';
+import { ProgressChecklist } from '@/components/ProgressChecklist';
+import { getActorProfileChecklist } from '@/lib/workflows';
 
 interface PageProps {
     params: Promise<{ id: string }>;
@@ -14,15 +14,16 @@ interface PageProps {
 export default function ApplyToCastingCallPage({ params }: PageProps) {
     const { id } = use(params);
     const router = useRouter();
+
     const [profile, setProfile] = useState<{ full_name: string } | null>(null);
-    const [actorProfile, setActorProfile] = useState<{ id: string } | null>(null);
-    const [castingCall, setCastingCall] = useState<{ title: string; casting_profile?: { company_name: string } } | null>(null);
+    const [actorProfile, setActorProfile] = useState<any>(null);
+    const [actorImages, setActorImages] = useState<{ type: 'left' | 'center' | 'right' }[]>([]);
+    const [castingCall, setCastingCall] = useState<any>(null);
     const [loading, setLoading] = useState(true);
     const [submitting, setSubmitting] = useState(false);
     const [error, setError] = useState('');
     const [alreadyApplied, setAlreadyApplied] = useState(false);
 
-    // Form state
     const [coverLetter, setCoverLetter] = useState('');
     const [videoUrl, setVideoUrl] = useState('');
 
@@ -30,94 +31,68 @@ export default function ApplyToCastingCallPage({ params }: PageProps) {
         loadData();
     }, [id]);
 
-    const loadData = async () => {
-        const supabase = createClient();
-        const { data: { user } } = await supabase.auth.getUser();
+    const readiness = useMemo(() => getActorProfileChecklist(actorProfile, actorImages), [actorProfile, actorImages]);
 
-        if (!user) {
-            router.push('/auth/login');
+    const loadData = async () => {
+        const [profileResponse, actorResponse, callResponse, applicationsResponse] = await Promise.all([
+            fetch('/api/actor/profile'),
+            fetch('/api/actor/profile'),
+            fetch(`/api/public/casting-calls/${id}`),
+            fetch('/api/actor/applications'),
+        ]);
+
+        if (!profileResponse.ok || !callResponse.ok) {
+            router.push('/actor/casting-calls');
             return;
         }
 
-        // Get profile
-        const { data: profileData } = await supabase
-            .from('profiles')
-            .select('full_name')
-            .eq('id', user.id)
-            .single();
+        const profilePayload = await profileResponse.json();
+        const callPayload = await callResponse.json();
+        const applicationsPayload = applicationsResponse.ok ? await applicationsResponse.json() : { applications: [] };
 
-        // Get actor profile
-        const { data: actorData } = await supabase
-            .from('actor_profiles')
-            .select('id')
-            .eq('user_id', user.id)
-            .single();
-
-        // Get casting call
-        const { data: callData } = await supabase
-            .from('casting_calls')
-            .select(`
-                title,
-                casting_profile:casting_profiles(company_name)
-            `)
-            .eq('id', id)
-            .single();
-
-        // Check if already applied
-        if (actorData) {
-            const { data: existingApp } = await supabase
-                .from('applications')
-                .select('id')
-                .eq('casting_call_id', id)
-                .eq('actor_id', actorData.id)
-                .single();
-
-            if (existingApp) {
-                setAlreadyApplied(true);
-            }
-        }
-
-        setProfile(profileData);
+        const actorData = profilePayload.actorProfile
+            ? {
+                  ...profilePayload.actorProfile,
+                  user_id: profilePayload.actorProfile.userId,
+                  past_works: profilePayload.actorProfile.pastWorks || [],
+              }
+            : null;
+        setProfile({ full_name: profilePayload.profile.fullName });
         setActorProfile(actorData);
-        // Transform callData to handle Supabase's array response for joins
-        if (callData) {
-            const castingProfile = Array.isArray(callData.casting_profile)
-                ? callData.casting_profile[0]
-                : callData.casting_profile;
-            setCastingCall({
-                title: callData.title,
-                casting_profile: castingProfile
-            });
-        } else {
-            setCastingCall(null);
-        }
+        setCastingCall(callPayload.castingCall);
+        setActorImages((profilePayload.images || []).map((image: any) => ({ type: image.type })));
+        setAlreadyApplied((applicationsPayload.applications || []).some((app: any) => app.castingCallId === id));
         setLoading(false);
     };
 
     const handleSubmit = async (e: React.FormEvent) => {
         e.preventDefault();
         if (!actorProfile) {
-            setError('Actor profile not found. Please complete your profile first.');
+            setError('Your actor profile is missing. Complete setup first.');
+            return;
+        }
+        if (!videoUrl.trim()) {
+            setError('Add an audition link so the casting team can review your work.');
             return;
         }
 
         setSubmitting(true);
         setError('');
 
-        const supabase = createClient();
-
-        const { error: insertError } = await supabase
-            .from('applications')
-            .insert({
-                casting_call_id: id,
-                actor_id: actorProfile.id,
+        const response = await fetch('/api/applications', {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json',
+            },
+            body: JSON.stringify({
+                castingCallId: id,
                 notes: coverLetter || null,
-                audition_video_url: videoUrl || null,
-                status: 'applied',
-            });
-
-        if (insertError) {
-            setError(insertError.message);
+                auditionVideoUrl: videoUrl.trim(),
+            }),
+        });
+        const payload = await response.json();
+        if (!response.ok) {
+            setError(payload.error || 'Submission failed.');
             setSubmitting(false);
             return;
         }
@@ -126,26 +101,22 @@ export default function ApplyToCastingCallPage({ params }: PageProps) {
     };
 
     if (loading) {
-        return (
-            <div className="min-h-screen bg-neutral-950 flex items-center justify-center">
-                <div className="text-white">Loading...</div>
-            </div>
-        );
+        return <div className="page-shell flex items-center justify-center text-[var(--text)]">Preparing submission...</div>;
     }
 
     if (alreadyApplied) {
         return (
-            <div className="min-h-screen bg-neutral-950">
+            <div className="page-shell">
                 <DashboardNav role="actor" userName={profile?.full_name || 'Actor'} />
-                <main className="max-w-2xl mx-auto px-4 py-16 text-center">
-                    <div className="card">
-                        <span className="text-5xl mb-4 block">✅</span>
-                        <h1 className="text-2xl font-bold text-white mb-2">Already Applied</h1>
-                        <p className="text-neutral-400 mb-6">
-                            You have already submitted an application for this role.
+                <main className="page-container py-16">
+                    <div className="mx-auto max-w-2xl card text-center">
+                        <p className="section-label">Submission status</p>
+                        <h1 className="mt-3 font-[var(--font-serif)] text-4xl">You have already applied to this role</h1>
+                        <p className="mt-4 text-[var(--muted)]">
+                            Review your audition timeline from the applications workspace.
                         </p>
-                        <Link href="/actor/applications" className="btn btn-primary">
-                            View My Applications
+                        <Link href="/actor/applications" className="btn btn-primary mt-8">
+                            View my auditions
                         </Link>
                     </div>
                 </main>
@@ -154,89 +125,106 @@ export default function ApplyToCastingCallPage({ params }: PageProps) {
     }
 
     return (
-        <div className="min-h-screen bg-neutral-950">
+        <div className="page-shell">
             <DashboardNav role="actor" userName={profile?.full_name || 'Actor'} />
 
-            <main className="max-w-2xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
-                {/* Back link */}
-                <Link
-                    href={`/actor/casting-calls/${id}`}
-                    className="inline-flex items-center text-neutral-400 hover:text-white mb-6 transition-colors"
-                >
-                    ← Back to Details
+            <main className="page-container py-8">
+                <Link href={`/actor/casting-calls/${id}`} className="btn btn-ghost px-0">
+                    Back to role details
                 </Link>
 
-                <h1 className="text-2xl md:text-3xl font-bold text-white mb-2">Apply for Role</h1>
-                <p className="text-neutral-400 mb-8">
-                    {castingCall?.title} • {castingCall?.casting_profile?.company_name}
-                </p>
+                <div className="mt-6 grid gap-8 xl:grid-cols-[1.1fr_0.9fr]">
+                    <form onSubmit={handleSubmit} className="card">
+                        <p className="section-label">Audition submission</p>
+                        <h1 className="mt-3 font-[var(--font-serif)] text-4xl">Submit for {castingCall?.title}</h1>
+                        <p className="mt-3 text-[var(--muted)]">
+                            {castingCall?.casting_profile?.company_name || 'Casting team'}{castingCall?.casting_profile?.verified ? ' · verified casting identity' : ''}
+                        </p>
 
-                <form onSubmit={handleSubmit} className="card">
-                    {error && (
-                        <div className="mb-6 p-4 rounded-xl bg-red-500/10 border border-red-500/30 text-red-300">
-                            {error}
+                        {error ? (
+                            <div className="mt-6 rounded-[1.5rem] border border-[rgba(214,106,94,0.3)] bg-[rgba(214,106,94,0.1)] px-4 py-3 text-sm text-[#efb3ac]">
+                                {error}
+                            </div>
+                        ) : null}
+
+                        <div className="mt-8 space-y-5">
+                            <div>
+                                <label className="mb-2 block text-sm font-medium text-[var(--text)]">
+                                    Why you fit this role
+                                </label>
+                                <textarea
+                                    value={coverLetter}
+                                    onChange={(e) => setCoverLetter(e.target.value)}
+                                    className="textarea"
+                                    placeholder="Keep it specific: your type, language strengths, availability, and why this brief fits your profile."
+                                />
+                            </div>
+
+                            <div>
+                                <label className="mb-2 block text-sm font-medium text-[var(--text)]">
+                                    Audition video link
+                                </label>
+                                <input
+                                    type="url"
+                                    value={videoUrl}
+                                    onChange={(e) => setVideoUrl(e.target.value)}
+                                    className="input"
+                                    placeholder="https://youtube.com/... or a secure Drive/Vimeo link"
+                                    required
+                                />
+                                <p className="mt-2 text-xs text-[var(--muted)]">
+                                    Use a link that casting teams can open without requesting permission.
+                                </p>
+                            </div>
                         </div>
-                    )}
 
-                    {/* Cover Letter */}
-                    <div className="mb-6">
-                        <label className="block text-sm font-medium text-neutral-300 mb-2">
-                            Cover Letter / Message
-                        </label>
-                        <textarea
-                            value={coverLetter}
-                            onChange={(e) => setCoverLetter(e.target.value)}
-                            className="input min-h-[150px]"
-                            placeholder="Introduce yourself and explain why you're perfect for this role..."
+                        {castingCall?.audition_instructions ? (
+                            <div className="mt-8 rounded-[1.5rem] border border-white/8 bg-white/3 p-5">
+                                <p className="section-label">Casting instructions</p>
+                                <p className="mt-3 whitespace-pre-wrap text-sm leading-7 text-[var(--text)]">
+                                    {castingCall.audition_instructions}
+                                </p>
+                            </div>
+                        ) : null}
+
+                        <div className="mt-8 flex items-center justify-between gap-4">
+                            <p className="max-w-md text-sm text-[var(--muted)]">
+                                Your contact information stays protected until the team moves you to a selected state.
+                            </p>
+                            <button type="submit" disabled={submitting} className="btn btn-primary">
+                                {submitting ? 'Submitting...' : 'Send audition'}
+                            </button>
+                        </div>
+                    </form>
+
+                    <aside className="space-y-8">
+                        <ProgressChecklist
+                            title="Profile readiness before submission"
+                            percent={readiness.percent}
+                            items={readiness.checks}
+                            note="You can still submit now, but stronger readiness improves review confidence."
                         />
-                        <p className="text-neutral-500 text-xs mt-1">
-                            Tell the caster why you&apos;re interested and what makes you a great fit
-                        </p>
-                    </div>
 
-                    {/* Audition Video URL */}
-                    <div className="mb-8">
-                        <label className="block text-sm font-medium text-neutral-300 mb-2">
-                            Audition Video URL
-                        </label>
-                        <input
-                            type="url"
-                            value={videoUrl}
-                            onChange={(e) => setVideoUrl(e.target.value)}
-                            className="input"
-                            placeholder="https://youtube.com/watch?v=... or https://drive.google.com/..."
-                        />
-                        <p className="text-neutral-500 text-xs mt-1">
-                            Upload your audition to YouTube, Vimeo, or Google Drive and paste the link
-                        </p>
-                    </div>
-
-                    {/* Info Box */}
-                    <div className="mb-8 p-4 rounded-xl bg-primary-500/10 border border-primary-500/30">
-                        <p className="text-primary-300 text-sm">
-                            💡 <strong>Tip:</strong> Your profile information will be shared with the caster.
-                            Make sure your profile is complete and up-to-date.
-                        </p>
-                    </div>
-
-                    {/* Submit */}
-                    <div className="flex justify-end gap-4">
-                        <button
-                            type="button"
-                            onClick={() => router.back()}
-                            className="btn btn-ghost"
-                        >
-                            Cancel
-                        </button>
-                        <button
-                            type="submit"
-                            disabled={submitting}
-                            className="btn btn-primary px-8"
-                        >
-                            {submitting ? 'Submitting...' : 'Submit Application'}
-                        </button>
-                    </div>
-                </form>
+                        <div className="card">
+                            <p className="section-label">Submission notes</p>
+                            <h2 className="mt-3 panel-title">Before you hit send</h2>
+                            <div className="mt-5 space-y-3">
+                                {(castingCall?.submission_checklist?.length
+                                    ? castingCall.submission_checklist
+                                    : [
+                                          'Use a working video link with visible performance.',
+                                          'Keep your message focused on fit, language, and availability.',
+                                          'Review your profile for missing bio, languages, or headshots.',
+                                      ]
+                                ).map((item: string) => (
+                                    <div key={item} className="rounded-[1.25rem] border border-white/8 bg-white/3 px-4 py-3 text-sm text-[var(--text)]">
+                                        {item}
+                                    </div>
+                                ))}
+                            </div>
+                        </div>
+                    </aside>
+                </div>
             </main>
         </div>
     );

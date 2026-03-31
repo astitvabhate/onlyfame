@@ -1,114 +1,121 @@
-import { createClient } from '@/lib/supabase/server';
-import { redirect } from 'next/navigation';
 import Link from 'next/link';
 import { DashboardNav } from '@/components/DashboardNav';
+import { getCastingCallChecklist } from '@/lib/workflows';
+import { requireRole } from '@/lib/session';
+import { prisma } from '@/lib/prisma';
 
 export default async function CasterCallsPage() {
-    const supabase = await createClient();
+    const user = await requireRole('caster');
+    const castingCalls = user.castingProfile
+        ? await prisma.castingCall.findMany({
+              where: { casterId: user.castingProfile.id },
+              orderBy: { createdAt: 'desc' },
+          })
+        : [];
 
-    const { data: { user } } = await supabase.auth.getUser();
-    if (!user) redirect('/auth/login');
+    const applicationCounts = user.castingProfile
+        ? await prisma.application.findMany({
+              where: {
+                  castingCall: {
+                      casterId: user.castingProfile.id,
+                  },
+              },
+              select: {
+                  castingCallId: true,
+                  status: true,
+              },
+          })
+        : [];
 
-    const { data: profile } = await supabase
-        .from('profiles')
-        .select('*')
-        .eq('id', user.id)
-        .single();
-
-    const { data: casterProfile } = await supabase
-        .from('casting_profiles')
-        .select('*')
-        .eq('user_id', user.id)
-        .single();
-
-    const { data: castingCalls } = await supabase
-        .from('casting_calls')
-        .select('*')
-        .eq('caster_id', casterProfile?.id)
-        .order('created_at', { ascending: false });
-
-    // Get application counts for each call
-    const callIds = castingCalls?.map(c => c.id) || [];
-    const { data: applicationCounts } = callIds.length > 0
-        ? await supabase
-            .from('applications')
-            .select('casting_call_id')
-            .in('casting_call_id', callIds)
-        : { data: [] };
-
-    const countsMap = (applicationCounts || []).reduce((acc, app) => {
-        acc[app.casting_call_id] = (acc[app.casting_call_id] || 0) + 1;
+    const countsMap = applicationCounts.reduce((acc, application) => {
+        const current = acc[application.castingCallId] || { total: 0, shortlisted: 0 };
+        current.total += 1;
+        if (application.status === 'shortlisted') current.shortlisted += 1;
+        acc[application.castingCallId] = current;
         return acc;
-    }, {} as Record<string, number>);
+    }, {} as Record<string, { total: number; shortlisted: number }>);
 
     return (
-        <div className="min-h-screen bg-neutral-950">
-            <DashboardNav role="caster" userName={profile?.full_name || casterProfile?.company_name || 'Caster'} />
+        <div className="page-shell">
+            <DashboardNav role="caster" userName={user.fullName || user.castingProfile?.companyName || 'Caster'} />
 
-            <main className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
-                <div className="flex items-center justify-between mb-8">
-                    <div>
-                        <h1 className="text-3xl font-bold text-white mb-2">My Casting Calls</h1>
-                        <p className="text-neutral-400">Manage your role postings</p>
-                    </div>
-                    <Link href="/caster/create-call" className="btn btn-primary">
-                        <span>➕</span> Create New Call
-                    </Link>
-                </div>
-
-                {/* Calls List */}
-                {castingCalls && castingCalls.length > 0 ? (
-                    <div className="space-y-4">
-                        {castingCalls.map((call) => (
-                            <div key={call.id} className="card card-hover">
-                                <div className="flex items-start justify-between gap-4">
-                                    <div className="flex-grow">
-                                        <div className="flex items-center gap-3 mb-2">
-                                            <h3 className="font-semibold text-white text-lg">{call.title}</h3>
-                                            <span className={`badge ${call.is_active ? 'badge-success' : 'badge-warning'}`}>
-                                                {call.is_active ? 'Active' : 'Closed'}
-                                            </span>
-                                        </div>
-                                        <p className="text-neutral-400 text-sm line-clamp-2 mb-3">
-                                            {call.description || 'No description'}
-                                        </p>
-                                        <div className="flex items-center gap-4 text-sm">
-                                            <span className="text-neutral-500">
-                                                Posted {new Date(call.created_at).toLocaleDateString()}
-                                            </span>
-                                            {call.deadline && (
-                                                <span className="text-neutral-500">
-                                                    Deadline: {new Date(call.deadline).toLocaleDateString()}
-                                                </span>
-                                            )}
-                                            <span className="text-primary-400">
-                                                {countsMap[call.id] || 0} applications
-                                            </span>
-                                        </div>
-                                    </div>
-
-                                    <div className="flex items-center gap-2">
-                                        <Link
-                                            href={`/caster/applications?call=${call.id}`}
-                                            className="btn btn-secondary text-sm py-2"
-                                        >
-                                            View Applications
-                                        </Link>
-                                    </div>
-                                </div>
-                            </div>
-                        ))}
-                    </div>
-                ) : (
-                    <div className="card text-center py-16">
-                        <span className="text-5xl mb-4 block">📢</span>
-                        <h3 className="text-xl font-medium text-white mb-2">No casting calls yet</h3>
-                        <p className="text-neutral-500 mb-6">Create your first casting call to start discovering talent</p>
+            <main className="page-container py-8">
+                <div className="card">
+                    <div className="flex flex-col gap-5 lg:flex-row lg:items-end lg:justify-between">
+                        <div>
+                            <p className="section-label">Casting calls</p>
+                            <h1 className="mt-3 font-[var(--font-serif)] text-4xl">Manage role briefs and keep your pipeline healthy</h1>
+                            <p className="mt-3 max-w-2xl text-[var(--muted)]">
+                                Each call should set the tone for trust, fit, and submission quality. Review weak briefs before they create weak pipelines.
+                            </p>
+                        </div>
                         <Link href="/caster/create-call" className="btn btn-primary">
-                            Create Casting Call
+                            Create new call
                         </Link>
                     </div>
-                )}
+                </div>
+
+                <div className="mt-8 space-y-4">
+                    {castingCalls.length > 0 ? (
+                        castingCalls.map((call) => {
+                            const readiness = getCastingCallChecklist({
+                                ...call,
+                                requirements: (call.requirements || {}) as any,
+                                caster_id: call.casterId,
+                                sample_script_url: call.sampleScriptUrl,
+                                voice_note_url: call.voiceNoteUrl,
+                                project_type: call.projectType,
+                                shoot_location: call.shootLocation,
+                                compensation_details: call.compensationDetails,
+                                audition_instructions: call.auditionInstructions,
+                                submission_checklist: call.submissionChecklist,
+                            } as any);
+                            const counts = countsMap[call.id] || { total: 0, shortlisted: 0 };
+
+                            return (
+                                <article key={call.id} className="card">
+                                    <div className="flex flex-col gap-5 lg:flex-row lg:items-start lg:justify-between">
+                                        <div className="max-w-3xl">
+                                            <div className="flex flex-wrap items-center gap-3">
+                                                <h2 className="text-2xl font-semibold text-[var(--text)]">{call.title}</h2>
+                                                <span className={`badge ${call.isActive ? 'badge-success' : 'badge-neutral'}`}>
+                                                    {call.isActive ? 'Open' : 'Closed'}
+                                                </span>
+                                                <span className="badge badge-neutral">Readiness {readiness.percent}%</span>
+                                            </div>
+                                            <p className="mt-3 text-sm leading-7 text-[var(--muted)]">
+                                                {call.description || 'No role description has been added yet.'}
+                                            </p>
+                                            <div className="mt-5 flex flex-wrap gap-2">
+                                                {call.projectType ? <span className="badge badge-neutral">{call.projectType}</span> : null}
+                                                {call.shootLocation ? <span className="badge badge-neutral">{call.shootLocation}</span> : null}
+                                                <span className="badge badge-neutral">{counts.total} applicants</span>
+                                                <span className="badge badge-neutral">{counts.shortlisted} shortlisted</span>
+                                            </div>
+                                        </div>
+
+                                        <div className="flex flex-col items-start gap-3 lg:items-end">
+                                            <p className="text-sm text-[var(--muted)]">
+                                                {call.deadline ? `Deadline ${new Date(call.deadline).toLocaleDateString()}` : 'Rolling review'}
+                                            </p>
+                                            <Link href={`/caster/calls/${call.id}`} className="btn btn-secondary">
+                                                Open call workspace
+                                            </Link>
+                                        </div>
+                                    </div>
+                                </article>
+                            );
+                        })
+                    ) : (
+                        <div className="card text-center">
+                            <h2 className="font-[var(--font-serif)] text-3xl">No casting calls yet</h2>
+                            <p className="mt-3 text-[var(--muted)]">Create your first call to activate the talent pipeline.</p>
+                            <Link href="/caster/create-call" className="btn btn-primary mt-8">
+                                Create first call
+                            </Link>
+                        </div>
+                    )}
+                </div>
             </main>
         </div>
     );

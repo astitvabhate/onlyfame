@@ -1,8 +1,10 @@
-import { createClient } from '@/lib/supabase/server';
-import { redirect, notFound } from 'next/navigation';
 import Link from 'next/link';
+import { redirect } from 'next/navigation';
 import { DashboardNav } from '@/components/DashboardNav';
-import { ApplicationActions } from './ApplicationActions';
+import { StatusBadge } from '@/components/StatusBadge';
+import { getCastingCallChecklist } from '@/lib/workflows';
+import { requireRole } from '@/lib/session';
+import { prisma } from '@/lib/prisma';
 
 interface PageProps {
     params: Promise<{ id: string }>;
@@ -10,176 +12,163 @@ interface PageProps {
 
 export default async function CasterCallDetailPage({ params }: PageProps) {
     const { id } = await params;
-    const supabase = await createClient();
+    const user = await requireRole('caster');
 
-    const { data: { user } } = await supabase.auth.getUser();
-    if (!user) redirect('/auth/login');
+    const castingCall = user.castingProfile
+        ? await prisma.castingCall.findFirst({
+              where: {
+                  id,
+                  casterId: user.castingProfile.id,
+              },
+          })
+        : null;
 
-    const { data: profile } = await supabase
-        .from('profiles')
-        .select('full_name')
-        .eq('id', user.id)
-        .single();
-
-    const { data: casterProfile } = await supabase
-        .from('casting_profiles')
-        .select('id')
-        .eq('user_id', user.id)
-        .single();
-
-    // Get the casting call (verify ownership)
-    const { data: castingCall, error } = await supabase
-        .from('casting_calls')
-        .select('*')
-        .eq('id', id)
-        .eq('caster_id', casterProfile?.id)
-        .single();
-
-    if (error || !castingCall) {
-        notFound();
+    if (!castingCall) {
+        redirect('/caster/calls');
     }
 
-    // Get all applications for this call
-    const { data: applications } = await supabase
-        .from('applications')
-        .select(`
-            *,
-            actor:actor_profiles(
-                id,
-                bio,
-                experience_level,
-                profile:profiles(full_name, avatar_url)
-            )
-        `)
-        .eq('casting_call_id', id)
-        .order('created_at', { ascending: false });
+    const applications = await prisma.application.findMany({
+        where: { castingCallId: id },
+        include: {
+            actorProfile: {
+                include: {
+                    user: true,
+                },
+            },
+        },
+        orderBy: { createdAt: 'desc' },
+    });
 
+    const readiness = getCastingCallChecklist({
+        ...castingCall,
+        requirements: (castingCall.requirements || {}) as any,
+        caster_id: castingCall.casterId,
+        sample_script_url: castingCall.sampleScriptUrl,
+        voice_note_url: castingCall.voiceNoteUrl,
+        project_type: castingCall.projectType,
+        shoot_location: castingCall.shootLocation,
+        compensation_details: castingCall.compensationDetails,
+        audition_instructions: castingCall.auditionInstructions,
+        submission_checklist: castingCall.submissionChecklist,
+    } as any);
     const statusCounts = {
-        applied: applications?.filter(a => a.status === 'applied').length || 0,
-        shortlisted: applications?.filter(a => a.status === 'shortlisted').length || 0,
-        selected: applications?.filter(a => a.status === 'selected').length || 0,
-        rejected: applications?.filter(a => a.status === 'rejected').length || 0,
+        applied: applications.filter((application) => application.status === 'applied').length,
+        shortlisted: applications.filter((application) => application.status === 'shortlisted').length,
+        selected: applications.filter((application) => application.status === 'selected').length,
+        rejected: applications.filter((application) => application.status === 'rejected').length,
     };
 
     return (
-        <div className="min-h-screen bg-neutral-950">
-            <DashboardNav role="caster" userName={profile?.full_name || 'Caster'} />
+        <div className="page-shell">
+            <DashboardNav role="caster" userName={user.fullName || 'Caster'} />
 
-            <main className="max-w-6xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
-                {/* Back link */}
-                <Link
-                    href="/caster/calls"
-                    className="inline-flex items-center text-neutral-400 hover:text-white mb-6 transition-colors"
-                >
-                    ← Back to My Calls
+            <main className="page-container py-8">
+                <Link href="/caster/calls" className="btn btn-ghost px-0">
+                    Back to all calls
                 </Link>
 
-                {/* Header */}
-                <div className="flex items-start justify-between mb-8">
-                    <div>
-                        <h1 className="text-2xl md:text-3xl font-bold text-white mb-2">
-                            {castingCall.title}
-                        </h1>
-                        <div className="flex items-center gap-4 text-sm">
-                            <span className={`badge ${castingCall.is_active ? 'badge-success' : 'bg-neutral-700 text-neutral-400'}`}>
-                                {castingCall.is_active ? 'Active' : 'Closed'}
-                            </span>
-                            <span className="text-neutral-500">
-                                Posted {new Date(castingCall.created_at).toLocaleDateString()}
-                            </span>
-                        </div>
-                    </div>
-                </div>
-
-                {/* Stats */}
-                <div className="grid grid-cols-2 md:grid-cols-4 gap-4 mb-8">
-                    <div className="card text-center">
-                        <p className="text-2xl font-bold text-blue-400">{statusCounts.applied}</p>
-                        <p className="text-neutral-500 text-sm">New</p>
-                    </div>
-                    <div className="card text-center">
-                        <p className="text-2xl font-bold text-amber-400">{statusCounts.shortlisted}</p>
-                        <p className="text-neutral-500 text-sm">Shortlisted</p>
-                    </div>
-                    <div className="card text-center">
-                        <p className="text-2xl font-bold text-emerald-400">{statusCounts.selected}</p>
-                        <p className="text-neutral-500 text-sm">Selected</p>
-                    </div>
-                    <div className="card text-center">
-                        <p className="text-2xl font-bold text-red-400">{statusCounts.rejected}</p>
-                        <p className="text-neutral-500 text-sm">Rejected</p>
-                    </div>
-                </div>
-
-                {/* Applications */}
-                <h2 className="text-xl font-semibold text-white mb-4">
-                    Applications ({applications?.length || 0})
-                </h2>
-
-                {applications && applications.length > 0 ? (
-                    <div className="space-y-4">
-                        {applications.map((app) => (
-                            <div key={app.id} className="card card-hover">
-                                <div className="flex items-center justify-between">
-                                    <div className="flex items-center gap-4">
-                                        <div className="w-12 h-12 rounded-full bg-gradient-to-br from-primary-500 to-secondary-500 flex items-center justify-center text-white font-bold">
-                                            {app.actor?.profile?.full_name?.charAt(0) || '?'}
-                                        </div>
-                                        <div>
-                                            <h3 className="font-semibold text-white">
-                                                {app.actor?.profile?.full_name || 'Unknown Actor'}
-                                            </h3>
-                                            <p className="text-neutral-500 text-sm capitalize">
-                                                {app.actor?.experience_level || 'No experience info'}
-                                            </p>
-                                        </div>
-                                    </div>
-
-                                    <div className="flex items-center gap-4">
-                                        <span className={`badge badge-${app.status}`}>
-                                            {app.status.charAt(0).toUpperCase() + app.status.slice(1)}
+                <div className="mt-6 grid gap-8 xl:grid-cols-[1.1fr_0.9fr]">
+                    <section className="space-y-8">
+                        <div className="card">
+                            <div className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
+                                <div>
+                                    <div className="flex flex-wrap items-center gap-3">
+                                        <span className={`badge ${castingCall.isActive ? 'badge-success' : 'badge-neutral'}`}>
+                                            {castingCall.isActive ? 'Open' : 'Closed'}
                                         </span>
-
-                                        {app.audition_video_url && (
-                                            <a
-                                                href={app.audition_video_url}
-                                                target="_blank"
-                                                rel="noopener noreferrer"
-                                                className="btn btn-ghost text-sm"
-                                            >
-                                                🎬 Video
-                                            </a>
-                                        )}
-
-                                        <Link
-                                            href={`/caster/applications/${app.id}`}
-                                            className="btn btn-secondary text-sm"
-                                        >
-                                            Review
-                                        </Link>
+                                        <span className="badge badge-neutral">Readiness {readiness.percent}%</span>
                                     </div>
-                                </div>
-
-                                {app.cover_letter && (
-                                    <p className="mt-4 text-neutral-400 text-sm line-clamp-2">
-                                        {app.cover_letter}
+                                    <h1 className="mt-4 font-[var(--font-serif)] text-5xl">{castingCall.title}</h1>
+                                    <p className="mt-3 text-[var(--muted)]">
+                                        {castingCall.projectType || 'Open project'} · {castingCall.shootLocation || 'Location to be confirmed'}
                                     </p>
-                                )}
+                                </div>
+                                <Link href="/caster/applications" className="btn btn-primary">
+                                    Open review workspace
+                                </Link>
+                            </div>
 
-                                {/* Quick Actions */}
-                                {app.status === 'applied' && (
-                                    <ApplicationActions applicationId={app.id} />
+                            <p className="mt-8 whitespace-pre-wrap text-base leading-8 text-[var(--text)]">
+                                {castingCall.description || 'No role description has been provided.'}
+                            </p>
+
+                            {castingCall.auditionInstructions ? (
+                                <div className="mt-8 rounded-[1.5rem] border border-white/8 bg-white/3 p-5">
+                                    <p className="section-label">Audition direction</p>
+                                    <p className="mt-3 whitespace-pre-wrap text-sm leading-7 text-[var(--text)]">
+                                        {castingCall.auditionInstructions}
+                                    </p>
+                                </div>
+                            ) : null}
+                        </div>
+
+                        <div className="card">
+                            <div className="grid gap-4 md:grid-cols-4">
+                                <div className="metric">
+                                    <p className="metric-label">New</p>
+                                    <p className="metric-value">{statusCounts.applied}</p>
+                                </div>
+                                <div className="metric">
+                                    <p className="metric-label">Shortlisted</p>
+                                    <p className="metric-value">{statusCounts.shortlisted}</p>
+                                </div>
+                                <div className="metric">
+                                    <p className="metric-label">Selected</p>
+                                    <p className="metric-value">{statusCounts.selected}</p>
+                                </div>
+                                <div className="metric">
+                                    <p className="metric-label">Rejected</p>
+                                    <p className="metric-value">{statusCounts.rejected}</p>
+                                </div>
+                            </div>
+                        </div>
+                    </section>
+
+                    <aside className="space-y-8">
+                        <div className="card">
+                            <p className="section-label">Checklist</p>
+                            <h2 className="mt-3 panel-title">What applicants were asked to submit</h2>
+                            <div className="mt-5 space-y-3">
+                                {(castingCall.submissionChecklist?.length
+                                    ? castingCall.submissionChecklist
+                                    : ['No submission checklist has been added yet.']
+                                ).map((item) => (
+                                    <div key={item} className="rounded-[1.25rem] border border-white/8 bg-white/3 px-4 py-3 text-sm text-[var(--text)]">
+                                        {item}
+                                    </div>
+                                ))}
+                            </div>
+                        </div>
+
+                        <div className="card">
+                            <p className="section-label">Applicants</p>
+                            <h2 className="mt-3 panel-title">Recent activity for this call</h2>
+                            <div className="mt-5 space-y-3">
+                                {applications.length > 0 ? (
+                                    applications.map((application) => (
+                                        <div key={application.id} className="rounded-[1.25rem] border border-white/8 bg-white/3 px-4 py-4">
+                                            <div className="flex items-center justify-between gap-3">
+                                                <div>
+                                                    <p className="text-sm font-semibold text-[var(--text)]">
+                                                        {application.actorProfile?.user.fullName || 'Actor'}
+                                                    </p>
+                                                    <p className="mt-1 text-xs text-[var(--muted)]">
+                                                        {application.actorProfile?.location || 'Location not listed'}
+                                                    </p>
+                                                </div>
+                                                <StatusBadge status={application.status as any} />
+                                            </div>
+                                        </div>
+                                    ))
+                                ) : (
+                                    <div className="rounded-[1.25rem] border border-white/8 bg-white/3 px-4 py-4 text-sm text-[var(--muted)]">
+                                        No one has applied yet.
+                                    </div>
                                 )}
                             </div>
-                        ))}
-                    </div>
-                ) : (
-                    <div className="card text-center py-16">
-                        <span className="text-5xl mb-4 block">📭</span>
-                        <h3 className="text-xl font-medium text-white mb-2">No applications yet</h3>
-                        <p className="text-neutral-500">Applications will appear here when actors apply</p>
-                    </div>
-                )}
+                        </div>
+                    </aside>
+                </div>
             </main>
         </div>
     );

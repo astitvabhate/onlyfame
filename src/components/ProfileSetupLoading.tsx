@@ -1,14 +1,13 @@
 'use client';
 
 import * as React from 'react';
-import { createClient } from '@/lib/supabase/client';
 import { useRouter } from 'next/navigation';
+import { signOut } from 'next-auth/react';
 
 export function ProfileSetupLoading() {
     const router = useRouter();
     const handleLogout = async () => {
-        const supabase = createClient();
-        await supabase.auth.signOut();
+        await signOut({ redirect: false });
         router.push('/auth/login');
     };
 

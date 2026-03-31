@@ -1,141 +1,156 @@
-import { createClient } from '@/lib/supabase/server';
-import { redirect } from 'next/navigation';
 import Link from 'next/link';
 import { DashboardNav } from '@/components/DashboardNav';
+import { computeActorFit, getActorProfileChecklist } from '@/lib/workflows';
+import { requireRole } from '@/lib/session';
+import { prisma } from '@/lib/prisma';
 
 export default async function CastingCallsPage() {
-    const supabase = await createClient();
+    const user = await requireRole('actor');
+    const actorProfile = await prisma.actorProfile.findUnique({
+        where: { userId: user.id },
+        include: { images: true },
+    });
 
-    const { data: { user } } = await supabase.auth.getUser();
-    if (!user) redirect('/auth/login');
+    const castingCalls = await prisma.castingCall.findMany({
+        where: { isActive: true },
+        include: { castingProfile: true },
+        orderBy: { createdAt: 'desc' },
+    });
 
-    const { data: profile } = await supabase
-        .from('profiles')
-        .select('*')
-        .eq('id', user.id)
-        .single();
+    const applications = actorProfile
+        ? await prisma.application.findMany({
+              where: { actorId: actorProfile.id },
+              select: { castingCallId: true },
+          })
+        : [];
 
-    const { data: actorProfile } = await supabase
-        .from('actor_profiles')
-        .select('*')
-        .eq('user_id', user.id)
-        .single();
-
-    // Get all active casting calls
-    const { data: castingCalls } = await supabase
-        .from('casting_calls')
-        .select(`
-      *,
-      casting_profile:casting_profiles(
-        company_name,
-        verified
-      )
-    `)
-        .eq('is_active', true)
-        .order('created_at', { ascending: false });
-
-    // Get actor's existing applications
-    const { data: applications } = await supabase
-        .from('applications')
-        .select('casting_call_id')
-        .eq('actor_id', actorProfile?.id);
-
-    const appliedCallIds = applications?.map(a => a.casting_call_id) || [];
+    const readiness = getActorProfileChecklist(
+        actorProfile
+            ? {
+                  ...actorProfile,
+                  user_id: actorProfile.userId,
+                  past_works: actorProfile.pastWorks as any[],
+              }
+            : null,
+        (actorProfile?.images || []).map((image) => ({ ...image, actor_id: image.actorId, image_url: image.imageUrl }))
+    );
+    const appliedCallIds = new Set(applications.map((application) => application.castingCallId));
 
     return (
-        <div className="min-h-screen bg-neutral-950">
-            <DashboardNav role="actor" userName={profile?.full_name || 'Actor'} />
+        <div className="page-shell">
+            <DashboardNav role="actor" userName={user.fullName || 'Actor'} />
 
-            <main className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
-                <div className="mb-8">
-                    <h1 className="text-3xl font-bold text-white mb-2">Casting Calls</h1>
-                    <p className="text-neutral-400">Browse available roles and apply with your audition</p>
+            <main className="page-container py-8">
+                <div className="card">
+                    <p className="section-label">Open calls</p>
+                    <div className="mt-3 flex flex-col gap-4 lg:flex-row lg:items-end lg:justify-between">
+                        <div>
+                            <h1 className="font-[var(--font-serif)] text-4xl">Discover roles that are ready for serious submissions</h1>
+                            <p className="mt-3 max-w-2xl text-[var(--muted)]">
+                                Calls are sorted by recency, but the strongest matches stand out through profile fit and trust cues.
+                            </p>
+                        </div>
+                        <div className="rounded-[1.5rem] border border-white/8 bg-white/3 px-5 py-4">
+                            <p className="text-xs uppercase tracking-[0.16em] text-[var(--muted)]">Profile readiness</p>
+                            <p className="mt-2 text-3xl font-semibold">{readiness.percent}%</p>
+                            <p className="mt-1 text-sm text-[var(--muted)]">
+                                {readiness.readyToApply ? 'You are ready to submit now.' : 'Finish setup for the strongest application.'}
+                            </p>
+                        </div>
+                    </div>
                 </div>
 
-                {/* Filters would go here */}
-
-                {/* Casting Calls Grid */}
-                <div className="grid md:grid-cols-2 lg:grid-cols-3 gap-6">
-                    {castingCalls && castingCalls.length > 0 ? (
+                <div className="mt-8 grid gap-6 md:grid-cols-2 xl:grid-cols-3">
+                    {castingCalls.length > 0 ? (
                         castingCalls.map((call) => {
-                            const hasApplied = appliedCallIds.includes(call.id);
-                            const requirements = call.requirements as Record<string, unknown> || {};
+                            const hasApplied = appliedCallIds.has(call.id);
+                            const fit = computeActorFit(
+                                actorProfile
+                                    ? {
+                                          ...actorProfile,
+                                          user_id: actorProfile.userId,
+                                          past_works: actorProfile.pastWorks as any[],
+                                      }
+                                    : null,
+                                {
+                                    ...call,
+                                    requirements: (call.requirements || {}) as any,
+                                    caster_id: call.casterId,
+                                    sample_script_url: call.sampleScriptUrl,
+                                    voice_note_url: call.voiceNoteUrl,
+                                    project_type: call.projectType,
+                                    shoot_location: call.shootLocation,
+                                    compensation_details: call.compensationDetails,
+                                    audition_instructions: call.auditionInstructions,
+                                    submission_checklist: call.submissionChecklist,
+                                } as any
+                            );
+                            const requirements = (call.requirements || {}) as Record<string, any>;
 
                             return (
-                                <div key={call.id} className="card card-hover flex flex-col">
-                                    <div className="flex items-start justify-between mb-4">
+                                <article key={call.id} className="card card-hover flex h-full flex-col">
+                                    <div className="flex items-start justify-between gap-4">
                                         <div>
-                                            <h3 className="font-semibold text-white text-lg">{call.title}</h3>
-                                            <div className="flex items-center gap-2 mt-1">
-                                                <span className="text-neutral-500 text-sm">
-                                                    {call.casting_profile?.company_name}
-                                                </span>
-                                                {call.casting_profile?.verified && (
-                                                    <span className="badge badge-success text-xs">✓ Verified</span>
-                                                )}
+                                            <div className="flex flex-wrap items-center gap-2">
+                                                <h2 className="text-2xl font-semibold text-[var(--text)]">{call.title}</h2>
+                                                {hasApplied ? <span className="badge badge-info">Applied</span> : null}
                                             </div>
+                                            <p className="mt-2 text-sm text-[var(--muted)]">
+                                                {call.castingProfile?.companyName || 'Casting team'}
+                                            </p>
                                         </div>
-                                        {hasApplied && (
-                                            <span className="badge badge-primary">Applied</span>
+                                        {call.castingProfile?.verified ? (
+                                            <span className="badge badge-success">Verified</span>
+                                        ) : (
+                                            <span className="badge badge-neutral">
+                                                {call.castingProfile?.verificationStatus === 'pending' ? 'Verification pending' : 'Open listing'}
+                                            </span>
                                         )}
                                     </div>
 
-                                    <p className="text-neutral-400 text-sm mb-4 flex-grow line-clamp-3">
-                                        {call.description || 'No description provided'}
+                                    <p className="mt-5 flex-1 text-sm leading-7 text-[var(--muted)]">
+                                        {call.description || 'Role brief will appear here once the team fills in more context.'}
                                     </p>
 
-                                    {/* Requirements */}
-                                    <div className="flex flex-wrap gap-2 mb-4">
+                                    <div className="mt-5 flex flex-wrap gap-2">
+                                        <span className="badge badge-neutral">Fit {fit.score}%</span>
+                                        {call.projectType ? <span className="badge badge-neutral">{call.projectType}</span> : null}
                                         {requirements.age_range ? (
-                                            <span className="badge bg-neutral-800 text-neutral-300">
-                                                Age: {String((requirements.age_range as { min: number; max: number }).min)}-{String((requirements.age_range as { min: number; max: number }).max)}
+                                            <span className="badge badge-neutral">
+                                                Age {String(requirements.age_range.min)}-{String(requirements.age_range.max)}
                                             </span>
                                         ) : null}
-                                        {requirements.gender ? (
-                                            <span className="badge bg-neutral-800 text-neutral-300">
-                                                {String(Array.isArray(requirements.gender) ? (requirements.gender as string[]).join(', ') : requirements.gender)}
-                                            </span>
-                                        ) : null}
-                                        {requirements.experience_level ? (
-                                            <span className="badge bg-neutral-800 text-neutral-300 capitalize">
-                                                {String(requirements.experience_level)}
-                                            </span>
+                                        {requirements.location ? (
+                                            <span className="badge badge-neutral">{String(requirements.location)}</span>
                                         ) : null}
                                     </div>
 
-                                    {/* Posted date */}
-                                    <p className="text-neutral-600 text-xs mb-4">
-                                        Posted {new Date(call.created_at).toLocaleDateString()}
-                                        {call.deadline && ` • Deadline: ${new Date(call.deadline).toLocaleDateString()}`}
-                                    </p>
+                                    {call.submissionChecklist?.length ? (
+                                        <div className="mt-5 rounded-[1.25rem] border border-white/8 bg-white/3 p-4">
+                                            <p className="text-xs uppercase tracking-[0.16em] text-[var(--muted)]">Submission checklist</p>
+                                            <ul className="mt-3 space-y-2 text-sm text-[var(--text)]">
+                                                {call.submissionChecklist.slice(0, 3).map((item) => (
+                                                    <li key={item}>• {item}</li>
+                                                ))}
+                                            </ul>
+                                        </div>
+                                    ) : null}
 
-                                    {/* Actions */}
-                                    <div className="flex gap-2">
-                                        <Link
-                                            href={`/actor/casting-calls/${call.id}`}
-                                            className="btn btn-secondary flex-1 text-sm py-2"
-                                        >
-                                            View Details
+                                    <div className="mt-6 flex items-center justify-between gap-3">
+                                        <div className="text-sm text-[var(--muted)]">
+                                            {call.deadline ? `Deadline ${new Date(call.deadline).toLocaleDateString()}` : 'Rolling review'}
+                                        </div>
+                                        <Link href={`/actor/casting-calls/${call.id}`} className="btn btn-primary">
+                                            View details
                                         </Link>
-                                        {!hasApplied && (
-                                            <Link
-                                                href={`/actor/casting-calls/${call.id}/apply`}
-                                                className="btn btn-primary flex-1 text-sm py-2"
-                                            >
-                                                Apply Now
-                                            </Link>
-                                        )}
                                     </div>
-                                </div>
+                                </article>
                             );
                         })
                     ) : (
-                        <div className="col-span-full">
-                            <div className="card text-center py-16">
-                                <span className="text-5xl mb-4 block">🎬</span>
-                                <h3 className="text-xl font-medium text-white mb-2">No casting calls available</h3>
-                                <p className="text-neutral-500">Check back soon for new opportunities!</p>
-                            </div>
+                        <div className="card md:col-span-2 xl:col-span-3">
+                            <h2 className="font-[var(--font-serif)] text-3xl">No active casting calls right now</h2>
+                            <p className="mt-3 text-[var(--muted)]">New opportunities will appear here as verified teams open submissions.</p>
                         </div>
                     )}
                 </div>

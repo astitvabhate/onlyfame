@@ -1,143 +1,143 @@
-import { createClient } from '@/lib/supabase/server';
-import { redirect } from 'next/navigation';
 import Link from 'next/link';
 import { DashboardNav } from '@/components/DashboardNav';
+import { StatusBadge } from '@/components/StatusBadge';
+import { getApplicationStatusCopy } from '@/lib/workflows';
+import { requireRole } from '@/lib/session';
+import { prisma } from '@/lib/prisma';
 
 export default async function ActorApplicationsPage() {
-    const supabase = await createClient();
+    const user = await requireRole('actor');
+    const actorProfile = await prisma.actorProfile.findUnique({
+        where: { userId: user.id },
+    });
 
-    const { data: { user } } = await supabase.auth.getUser();
-    if (!user) redirect('/auth/login');
-
-    const { data: profile } = await supabase
-        .from('profiles')
-        .select('*')
-        .eq('id', user.id)
-        .single();
-
-    const { data: actorProfile } = await supabase
-        .from('actor_profiles')
-        .select('*')
-        .eq('user_id', user.id)
-        .single();
-
-    const { data: applications } = await supabase
-        .from('applications')
-        .select(`
-      *,
-      casting_call:casting_calls(
-        title,
-        description,
-        casting_profile:casting_profiles(
-          company_name,
-          verified
-        )
-      )
-    `)
-        .eq('actor_id', actorProfile?.id)
-        .order('created_at', { ascending: false });
+    const applications = actorProfile
+        ? await prisma.application.findMany({
+              where: { actorId: actorProfile.id },
+              include: {
+                  castingCall: {
+                      include: {
+                          castingProfile: true,
+                      },
+                  },
+              },
+              orderBy: { createdAt: 'desc' },
+          })
+        : [];
 
     const statusGroups = {
-        applied: applications?.filter(a => a.status === 'applied') || [],
-        shortlisted: applications?.filter(a => a.status === 'shortlisted') || [],
-        selected: applications?.filter(a => a.status === 'selected') || [],
-        rejected: applications?.filter(a => a.status === 'rejected') || [],
+        applied: applications.filter((application) => application.status === 'applied').length,
+        shortlisted: applications.filter((application) => application.status === 'shortlisted').length,
+        selected: applications.filter((application) => application.status === 'selected').length,
+        rejected: applications.filter((application) => application.status === 'rejected').length,
     };
 
     return (
-        <div className="min-h-screen bg-neutral-950">
-            <DashboardNav role="actor" userName={profile?.full_name || 'Actor'} />
+        <div className="page-shell">
+            <DashboardNav role="actor" userName={user.fullName || 'Actor'} />
 
-            <main className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
-                <div className="mb-8">
-                    <h1 className="text-3xl font-bold text-white mb-2">My Applications</h1>
-                    <p className="text-neutral-400">Track the status of your audition submissions</p>
-                </div>
-
-                {/* Stats */}
-                <div className="grid grid-cols-2 md:grid-cols-4 gap-4 mb-8">
-                    <div className="card text-center">
-                        <p className="text-2xl font-bold text-blue-400">{statusGroups.applied.length}</p>
-                        <p className="text-neutral-500 text-sm">Applied</p>
-                    </div>
-                    <div className="card text-center">
-                        <p className="text-2xl font-bold text-amber-400">{statusGroups.shortlisted.length}</p>
-                        <p className="text-neutral-500 text-sm">Shortlisted</p>
-                    </div>
-                    <div className="card text-center">
-                        <p className="text-2xl font-bold text-emerald-400">{statusGroups.selected.length}</p>
-                        <p className="text-neutral-500 text-sm">Selected</p>
-                    </div>
-                    <div className="card text-center">
-                        <p className="text-2xl font-bold text-red-400">{statusGroups.rejected.length}</p>
-                        <p className="text-neutral-500 text-sm">Rejected</p>
-                    </div>
-                </div>
-
-                {/* Applications List */}
-                {applications && applications.length > 0 ? (
-                    <div className="space-y-4">
-                        {applications.map((app) => (
-                            <div key={app.id} className="card card-hover">
-                                <div className="flex items-center justify-between">
-                                    <div className="flex-grow">
-                                        <div className="flex items-center gap-3 mb-2">
-                                            <h3 className="font-semibold text-white text-lg">
-                                                {app.casting_call?.title}
-                                            </h3>
-                                            <span className={`badge badge-${app.status}`}>
-                                                {app.status.charAt(0).toUpperCase() + app.status.slice(1)}
-                                            </span>
-                                        </div>
-                                        <div className="flex items-center gap-2">
-                                            <span className="text-neutral-400 text-sm">
-                                                {app.casting_call?.casting_profile?.company_name}
-                                            </span>
-                                            {app.casting_call?.casting_profile?.verified && (
-                                                <span className="text-emerald-400 text-xs">✓ Verified</span>
-                                            )}
-                                        </div>
-                                        <p className="text-neutral-500 text-sm mt-2">
-                                            Applied on {new Date(app.created_at).toLocaleDateString()}
-                                        </p>
-                                    </div>
-
-                                    <div className="flex items-center gap-4">
-                                        {app.audition_video_url && (
-                                            <a
-                                                href={app.audition_video_url}
-                                                target="_blank"
-                                                rel="noopener noreferrer"
-                                                className="btn btn-ghost text-sm"
-                                            >
-                                                View Video
-                                            </a>
-                                        )}
-                                    </div>
-                                </div>
-
-                                {/* Show contact info if selected */}
-                                {app.status === 'selected' && (
-                                    <div className="mt-4 p-4 rounded-xl bg-emerald-500/10 border border-emerald-500/30">
-                                        <p className="text-emerald-300 font-medium mb-2">🎉 Congratulations! You've been selected!</p>
-                                        <p className="text-emerald-300/70 text-sm">
-                                            The casting team will contact you with further details.
-                                        </p>
-                                    </div>
-                                )}
-                            </div>
-                        ))}
-                    </div>
-                ) : (
-                    <div className="card text-center py-16">
-                        <span className="text-5xl mb-4 block">📋</span>
-                        <h3 className="text-xl font-medium text-white mb-2">No applications yet</h3>
-                        <p className="text-neutral-500 mb-6">Start applying to casting calls to see your applications here</p>
-                        <Link href="/actor/casting-calls" className="btn btn-primary">
-                            Browse Casting Calls
+            <main className="page-container py-8">
+                <div className="card">
+                    <p className="section-label">Application timeline</p>
+                    <div className="mt-3 flex flex-col gap-5 lg:flex-row lg:items-end lg:justify-between">
+                        <div>
+                            <h1 className="font-[var(--font-serif)] text-4xl">Track every audition from first submission to final response</h1>
+                            <p className="mt-3 max-w-2xl text-[var(--muted)]">
+                                This view keeps your roles, current decision stage, and any trust-sensitive next steps visible in one place.
+                            </p>
+                        </div>
+                        <Link href="/actor/casting-calls" className="btn btn-secondary">
+                            Find more calls
                         </Link>
                     </div>
-                )}
+
+                    <div className="mt-8 grid gap-4 md:grid-cols-4">
+                        <div className="metric">
+                            <p className="metric-label">Under review</p>
+                            <p className="metric-value">{statusGroups.applied}</p>
+                        </div>
+                        <div className="metric">
+                            <p className="metric-label">Shortlisted</p>
+                            <p className="metric-value">{statusGroups.shortlisted}</p>
+                        </div>
+                        <div className="metric">
+                            <p className="metric-label">Selected</p>
+                            <p className="metric-value">{statusGroups.selected}</p>
+                        </div>
+                        <div className="metric">
+                            <p className="metric-label">Closed out</p>
+                            <p className="metric-value">{statusGroups.rejected}</p>
+                        </div>
+                    </div>
+                </div>
+
+                <div className="mt-8 space-y-4">
+                    {applications.length > 0 ? (
+                        applications.map((application) => {
+                            const status = getApplicationStatusCopy(application.status as any);
+
+                            return (
+                                <article key={application.id} className="card">
+                                    <div className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
+                                        <div>
+                                            <div className="flex flex-wrap items-center gap-3">
+                                                <h2 className="text-2xl font-semibold text-[var(--text)]">
+                                                    {application.castingCall?.title}
+                                                </h2>
+                                                <StatusBadge status={application.status as any} />
+                                            </div>
+                                            <p className="mt-2 text-sm text-[var(--muted)]">
+                                                {application.castingCall?.castingProfile?.companyName || 'Casting team'}
+                                                {application.castingCall?.castingProfile?.verified ? ' · verified' : ''}
+                                            </p>
+                                            <p className="mt-4 max-w-2xl text-sm leading-7 text-[var(--muted)]">{status.note}</p>
+                                        </div>
+
+                                        <div className="rounded-[1.5rem] border border-white/8 bg-white/3 px-5 py-4 text-sm text-[var(--muted)]">
+                                            <p>Submitted {new Date(application.createdAt).toLocaleDateString()}</p>
+                                            <p className="mt-2">
+                                                {application.castingCall?.deadline
+                                                    ? `Deadline ${new Date(application.castingCall.deadline).toLocaleDateString()}`
+                                                    : 'Rolling review'}
+                                            </p>
+                                        </div>
+                                    </div>
+
+                                    <div className="mt-6 flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
+                                        <div className="flex flex-wrap gap-2">
+                                            {application.auditionVideoUrl ? (
+                                                <a
+                                                    href={application.auditionVideoUrl}
+                                                    target="_blank"
+                                                    rel="noopener noreferrer"
+                                                    className="btn btn-secondary"
+                                                >
+                                                    Open audition link
+                                                </a>
+                                            ) : null}
+                                        </div>
+
+                                        {application.status === 'selected' ? (
+                                            <div className="rounded-full bg-[rgba(84,176,138,0.12)] px-4 py-2 text-sm text-[#a9e7cb]">
+                                                Contact details can now be shared securely by the casting team.
+                                            </div>
+                                        ) : null}
+                                    </div>
+                                </article>
+                            );
+                        })
+                    ) : (
+                        <div className="card text-center">
+                            <h2 className="font-[var(--font-serif)] text-3xl">No auditions submitted yet</h2>
+                            <p className="mt-3 text-[var(--muted)]">
+                                Start with an open casting call and your application timeline will appear here.
+                            </p>
+                            <Link href="/actor/casting-calls" className="btn btn-primary mt-8">
+                                Browse open calls
+                            </Link>
+                        </div>
+                    )}
+                </div>
             </main>
         </div>
     );
